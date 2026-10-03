@@ -349,6 +349,7 @@ function timeline(t, today) {
 export async function openTask(id, defaults = {}) {
   const t = id ? await api(`/api/tasks/${id}`) : { title: '', status: 'not_started', priority: 'medium', updates: [], ...defaults };
   const docs = id ? await api(`/api/documents?q=`).then((all) => all.filter((d) => d.task_id === id)) : [];
+  const [skills, jobs] = id ? await Promise.all([api('/api/claude/skills'), api('/api/claude/jobs').then((all) => all.filter((j) => j.task_id === id))]) : [[], []];
   const { statuses, priorities } = store.meta;
   drawer.innerHTML = `
     <button class="btn ghost close" data-close>✕</button>
@@ -370,6 +371,17 @@ export async function openTask(id, defaults = {}) {
         ${id ? '<span class="spacer"></span><button type="button" class="btn danger" data-delete>Delete</button>' : ''}</div>
     </form>
     ${id ? `
+      <h2 style="margin-top:24px">🤖 Send to Claude</h2>
+      <form class="grid" id="claude-form" style="margin-top:8px">
+        <div class="form-grid">
+          <label class="field">Skill<select name="skill" required>${skills.filter((s) => s.name !== 'zordon-link').map((s) => `<option value="${esc(s.name)}">${esc(s.title)}</option>`).join('')}</select></label>
+          <label class="row small" style="align-self:end"><input type="checkbox" name="complete_task"> Mark this task done when Claude finishes</label>
+        </div>
+        <label class="field">Files to use (one per line: OneDrive path or link)<textarea name="inputs" rows="2" placeholder="5. PROJECTS/G3251/03 CONSTRUCTION SET/E-601.pdf"></textarea></label>
+        <label class="field">Notes for Claude<textarea name="instructions" rows="2" placeholder="Only panels LP-2A and LP-4; flag anything over 80% of bus"></textarea></label>
+        <div class="row"><button class="btn gold">⚡ Send to Claude</button><span class="small dim">Then tell Cowork: "Run my Zordon jobs"</span></div>
+      </form>
+      ${jobs.length ? `<div class="list" style="margin-top:8px">${jobs.map((j) => `<div class="item" style="cursor:default"><span class="pill">${esc(j.status)}</span><div class="grow"><div class="title">${esc(j.skill_title || j.skill)}</div><div class="sub">${esc(j.result_note || j.output_folder || '')}</div></div></div>`).join('')}</div>` : ''}
       <h2 style="margin-top:24px">Files</h2>
       <div class="list" style="margin-top:8px">${docs.map((d) => `<div class="item"><span class="pill">${esc(d.category)}</span><div class="grow"><div class="title">${esc(d.title)}</div><div class="sub mono">${esc(d.path)}</div></div></div>`).join('') || '<div class="small dim">No files linked. Upload in the Vault and pick this task.</div>'}</div>
       <h2 style="margin-top:24px">Updates</h2>
@@ -394,6 +406,18 @@ export async function openTask(id, defaults = {}) {
   drawer.querySelector('[data-delete]')?.addEventListener('click', () => {
     if (!confirm('Delete this task?')) return;
     guard(async () => { await api(`/api/tasks/${id}`, { method: 'DELETE' }); closeDrawer(); render(); });
+  });
+  drawer.querySelector('#claude-form')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const f = e.target;
+    guard(async () => {
+      const job = await api('/api/claude/jobs', { method: 'POST', body: {
+        skill: f.skill.value, task_id: id, instructions: f.instructions.value.trim(),
+        inputs: f.inputs.value.split('\n').map((x) => x.trim()).filter(Boolean), complete_task: f.complete_task.checked,
+      } });
+      toast(`Job #${job.id} queued — it saves to ${job.output_folder}`);
+      openTask(id);
+    });
   });
   drawer.querySelector('#update-form')?.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -434,6 +458,8 @@ async function refreshBadges() {
   set('badge-inbox', d.counts.new_emails);
   set('badge-reminders', d.team.reduce((s, p) => s + (p.delayed ? 1 : 0), 0));
   set('badge-doccontrol', d.doccontrol.in_my_court.length);
+  const props = await api('/api/claude/proposals').catch(() => []);
+  set('badge-claude', props.filter((p) => p.status === 'open').length);
 }
 
 window.addEventListener('hashchange', () => { closeDrawer(); render(); });

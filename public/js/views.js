@@ -24,7 +24,8 @@ async function projects(el, _p, { render }) {
         <h2>New project</h2>
         <form class="grid" id="new-project" style="margin-top:10px">
           <label class="field">Name<input name="name" required placeholder="e.g. Eastside Clinic TI"></label>
-          <div class="form-grid"><label class="field">Job code<input name="code" placeholder="ECT-301"></label>
+          <div class="form-grid"><label class="field">Job number<input name="code" placeholder="G3301"></label>
+            <label class="field">Short name for files<input name="short_name" placeholder="32ND ST"></label>
             <label class="field">Location<input name="location"></label></div>
           <button class="btn primary">Create project</button>
         </form>
@@ -49,9 +50,10 @@ async function projects(el, _p, { render }) {
     const p = projectById(Number(n.dataset.edit));
     const name = prompt('Project name', p.name);
     if (name === null) return;
-    const code = prompt('Job code', p.code || '');
+    const code = prompt('Job number (e.g. G2707)', p.code || '');
+    const short_name = prompt('Short name used in file names (e.g. BURB RPT)', p.short_name || '');
     const status = prompt('Status: active, on_hold or closed', p.status);
-    guard(async () => { await api(`/api/projects/${p.id}`, { method: 'PATCH', body: { name, code, status } }); render(); });
+    guard(async () => { await api(`/api/projects/${p.id}`, { method: 'PATCH', body: { name, code, short_name, status } }); render(); });
   });
 }
 
@@ -647,4 +649,100 @@ async function team(el, _p, { render }) {
   }));
 }
 
-export const views = { projects, doccontrol, schedule, meetings, inbox, reminders, vault, team };
+// ---------------- Claude Link ----------------
+async function claude(el, params, { render }) {
+  const tab = params.get('tab') || 'skills';
+  const [skills, jobs, proposals] = await Promise.all([api('/api/claude/skills'), api('/api/claude/jobs'), api('/api/claude/proposals')]);
+  const categories = await api('/api/documents/categories');
+  const open = proposals.filter((p) => p.status === 'open');
+  const go = (t) => { location.hash = `#/claude?tab=${t}`; };
+  const statusCls = { queued: 'h-due_soon', needs_input: 'h-stuck', done: 'h-done', failed: 'h-delayed', cancelled: '' };
+  el.innerHTML = `
+    <div class="page-head"><div><h1>Claude Link</h1>
+      <p>Zordon hands work to your Claude (Cowork) through OneDrive. Claude uses these skills, saves files into the right job folders, and reports back here.</p></div>
+      <div class="row"><button class="btn" id="copy-run">📋 Copy "run my jobs" for Cowork</button></div></div>
+    <div class="tabs">${[['skills', `Skills (${skills.length})`], ['jobs', `Jobs (${jobs.filter((j) => ['queued', 'needs_input'].includes(j.status)).length} open)`], ['learn', `Learning${open.length ? ` (${open.length})` : ''}`], ['filing', 'Filing rules']]
+      .map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div>
+    <div id="tab"></div>`;
+  const body = el.querySelector('#tab');
+
+  if (tab === 'skills') {
+    body.innerHTML = `
+      <div class="grid three">
+        ${skills.map((s) => `<section class="panel" style="display:grid;gap:8px">
+          <div class="row"><b>${esc(s.title)}</b><span class="spacer"></span>${s.builtin ? '<span class="pill">starter</span>' : '<span class="pill h-done">yours</span>'}</div>
+          <div class="small muted">${esc(s.description || '')}</div>
+          <div class="small dim">Saves to: ${esc(s.output_category || 'the job folder')} · <span class="mono">${esc(s.name)}</span></div>
+          <div class="row"><button class="btn sm" data-edit="${esc(s.name)}">Edit</button>${s.builtin ? '' : `<button class="btn sm danger" data-del="${esc(s.name)}">Delete</button>`}</div>
+        </section>`).join('')}
+        <section class="panel" style="display:grid;gap:8px;align-content:start">
+          <b>+ Teach Zordon a new skill</b>
+          <p class="small muted">Write it the way you'd explain it to a new project engineer. Claude follows it every time. You can also ask Claude in Cowork to "save this as a Zordon skill".</p>
+          <button class="btn gold" data-edit="">⚡ New skill</button>
+        </section>
+      </div>
+      <section class="panel" id="editor" style="margin-top:16px" hidden></section>`;
+    const editor = body.querySelector('#editor');
+    wire(body, '[data-edit]', 'click', (_e, n) => {
+      const s = skills.find((x) => x.name === n.dataset.edit) || { name: '', title: '', description: '', output_category: '', body: '' };
+      editor.hidden = false;
+      editor.innerHTML = `<h2>${s.name ? `Edit: ${esc(s.title)}` : 'New skill'}</h2>
+        <form class="grid" id="skill-form" style="margin-top:10px">
+          <div class="form-grid">
+            <label class="field">Short name (lowercase-with-dashes)<input name="name" required pattern="[a-z0-9][a-z0-9-]{1,48}" value="${esc(s.name)}" ${s.name ? 'readonly' : ''} placeholder="takeoff-count"></label>
+            <label class="field">Title<input name="title" required value="${esc(s.title)}" placeholder="Device takeoff count"></label>
+            <label class="field">Saves to<select name="output_category">${options(categories, s.output_category, { empty: 'Job folder', value: (c) => c, text: (c) => c })}</select></label>
+          </div>
+          <label class="field">When should Claude use it?<input name="description" value="${esc(s.description || '')}" placeholder="Count devices per sheet from lighting and power plans"></label>
+          <label class="field">Instructions (SKILL.md)<textarea name="body" rows="18" class="mono">${esc(s.body || '')}</textarea></label>
+          <div class="row"><button class="btn primary">Save skill</button><button type="button" class="btn ghost" id="cancel-edit">Cancel</button></div>
+        </form>`;
+      editor.scrollIntoView({ behavior: 'smooth' });
+      editor.querySelector('#cancel-edit').addEventListener('click', () => { editor.hidden = true; });
+      editor.querySelector('#skill-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const b = formData(e.target);
+        guard(async () => { await api(`/api/claude/skills/${b.name}`, { method: 'PUT', body: b }); toast('Skill saved — Claude will use it from now on'); render(); });
+      });
+    });
+    wire(body, '[data-del]', 'click', (_e, n) => confirm('Delete this skill?') && guard(async () => { await api(`/api/claude/skills/${n.dataset.del}`, { method: 'DELETE' }); render(); }));
+  }
+
+  if (tab === 'jobs') {
+    body.innerHTML = `
+      <div class="table-wrap"><table>
+        <thead><tr><th>#</th><th>Skill</th><th>Task / project</th><th>Status</th><th>Result</th><th></th></tr></thead>
+        <tbody>${jobs.map((j) => `<tr>
+          <td class="mono">${j.id}</td><td><b>${esc(j.skill_title || j.skill)}</b><div class="small dim">${esc(j.created_at)}</div></td>
+          <td>${esc(j.task_title || '—')}<div class="small dim">${esc(j.project_name || '')} · saves to <span class="mono">${esc(j.output_folder || '')}</span></div></td>
+          <td><span class="pill ${statusCls[j.status] || ''}">${esc(label(j.status))}</span></td>
+          <td class="small">${esc(j.result_note || '')}${j.outputs.map((o) => `<div class="mono dim">${esc(o.path)}</div>`).join('')}</td>
+          <td>${['queued', 'needs_input'].includes(j.status) ? `<button class="btn sm ghost" data-cancel="${j.id}">Cancel</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="6" class="dim">No jobs yet. Open any task and press 🤖 Send to Claude.</td></tr>'}</tbody>
+      </table></div>`;
+    wire(body, '[data-cancel]', 'click', (_e, n) => guard(async () => { await api(`/api/claude/jobs/${n.dataset.cancel}/cancel`, { method: 'POST', body: {} }); render(); }));
+  }
+
+  if (tab === 'learn') {
+    body.innerHTML = `
+      <p class="muted small">Claude watches how you actually work. When it sees the same new habit 3+ times it proposes an update here. Nothing changes until you approve.</p>
+      <div class="grid" style="gap:10px">${proposals.map((p) => `<section class="panel">
+        <div class="row"><span class="pill ${p.status === 'open' ? 'h-due_soon' : p.status === 'approved' ? 'h-done' : ''}">${esc(p.status)}</span>
+          <span class="pill">${p.kind === 'skill' ? `skill: ${esc(p.skill)}` : 'filing rule'}</span><b>${esc(p.title)}</b></div>
+        ${p.rule ? `<p>${esc(p.rule)}</p>` : ''}
+        ${p.evidence.length ? `<div class="small dim">Seen: ${p.evidence.map(esc).join(' · ')}</div>` : ''}
+        ${p.body ? `<details><summary class="small muted">Proposed skill text</summary><pre class="reminder">${esc(p.body)}</pre></details>` : ''}
+        ${p.status === 'open' ? `<div class="row" style="margin-top:8px"><button class="btn primary sm" data-decide="${p.id}/approve">Approve</button><button class="btn ghost sm" data-decide="${p.id}/dismiss">Dismiss</button></div>` : ''}
+      </section>`).join('') || '<div class="empty">No proposals yet. The weekly habit check and Cowork add them here.</div>'}</div>`;
+    wire(body, '[data-decide]', 'click', (_e, n) => guard(async () => { await api(`/api/claude/proposals/${n.dataset.decide}`, { method: 'POST', body: {} }); toast('Done'); render(); }));
+  }
+
+  if (tab === 'filing') {
+    const { markdown } = await api('/api/claude/filing');
+    body.innerHTML = `<section class="panel"><p class="small muted">This is <span class="mono">Zordon/FILING.md</span> in your OneDrive — the rulebook Zordon and Claude both follow.</p><pre class="reminder">${esc(markdown)}</pre></section>`;
+  }
+
+  wire(el, '[data-tab]', 'click', (_e, n) => go(n.dataset.tab));
+  el.querySelector('#copy-run').addEventListener('click', () => navigator.clipboard.writeText('Run my Zordon jobs.').then(() => toast('Copied — paste it into Claude Cowork')));
+}
+
+export const views = { claude, projects, doccontrol, schedule, meetings, inbox, reminders, vault, team };

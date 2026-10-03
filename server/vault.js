@@ -1,60 +1,87 @@
-// Document Vault: give every file a predictable name and home.
-// Naming scheme: <CODE-Project-Name>/<NN-Category>/<YYYY-MM-DD>_<CODE>_<Category>_<Description>.<ext>
+// Document Vault: files every document the GEC2 way, into the same OneDrive folders the team already uses.
+//   5. PROJECTS/<Job #>/<NN FOLDER>/<Job #>_<SHORT NAME> - <TYPE> - <Description> (MM.DD.YYYY).<ext>
+//   e.g. 5. PROJECTS/G2707/07 RFIS/G2707_BURB RPT - RFI - Beam Penetration At C4 (10.03.2026).pdf
+// ZORDON_VAULT points at the OneDrive root; Zordon's own files live in <root>/Zordon.
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, extname, resolve, sep } from 'node:path';
 import { isoDate } from './db.js';
 import { aiEnabled } from './intel.js';
 
-export const CATEGORIES = {
-  'RFI': /\brfi\b|request for information/i,
-  'Submittal': /submittal|shop drawing|product data|cut sheet/i,
-  'Change Order': /change order|\bco\s?#?\d|\bpco\b|\bcor\b|change request|pricing/i,
-  'Meeting Minutes': /minutes|meeting notes|\boac\b|agenda|huddle/i,
-  'Daily Report': /daily (report|log)|dailies|field report|manpower/i,
-  'Schedule': /schedule|look-?ahead|gantt|\bcpm\b|milestone/i,
-  'Drawing': /drawing|\bdwg\b|plans?\b|sheet [a-z]-?\d|elevation|section|layout/i,
-  'Safety': /safety|jha|jsa|toolbox talk|incident|osha|ppe/i,
-  'Contract': /contract|subcontract|agreement|scope of work|\bsow\b|proposal|bid/i,
-  'Invoice': /invoice|pay app|payment application|billing|receipt|\bpo\b|purchase order/i,
-  'Inspection': /inspection|permit|punch ?list|test report|certificate/i,
-  'Photo': /\.(jpe?g|png|heic|webp)$|photo|picture/i,
-  'Correspondence': /letter|memo|email|notice|correspondence/i,
-};
-export const CATEGORY_NAMES = [...Object.keys(CATEGORIES), 'General'];
+// GEC2 Job Start-Up folder template (OneDrive "_ _ JOB START_UP FOLDER").
+export const JOB_TEMPLATE = [
+  '01 COST CONTROL', '02 BIM', '03 CONSTRUCTION SET', '04 DESIGN CHANGES', '05 SPECIFICATIONS', '06 SCHEDULE', '07 RFIS',
+  '08 JOB SITE PHOTOS', '09 PROCUREMENT LOG', '10 CORRESPONDENCE', '11 CLOSEOUTS', '12 TEMPLATES', '13 SAFETY', '14 SUBMITTALS', '15 PREFAB',
+];
 
-// Every project gets the same numbered folder tree, so files are always in the same place.
-export const CATEGORY_FOLDERS = {
-  'Contract': '01-Contracts',
-  'Change Order': '02-Change-Orders',
-  'Invoice': '03-Billing',
-  'RFI': '04-RFIs',
-  'Submittal': '05-Submittals',
-  'Drawing': '06-Drawings',
-  'Schedule': '07-Schedule',
-  'Meeting Minutes': '08-Meeting-Minutes',
-  'Daily Report': '09-Daily-Reports',
-  'Inspection': '10-Inspections-Permits',
-  'Safety': '11-Safety',
-  'Correspondence': '12-Correspondence',
-  'Photo': '13-Photos',
-  'General': '99-General',
-};
-export const INBOX = '_Inbox';
+// Document types, checked in order: [category, pattern, label used in the file name, template folder].
+const TYPES = [
+  ['RFI', /\brfis?\b|request for information/i, 'RFI', '07 RFIS'],
+  ['COR', /change order|\bcor\b|\bpcos?\b|\bpci\b|\bco\s?#?\d|change request|\brfc\b|t&m|time and material|pricing/i, 'COR', '01 COST CONTROL'],
+  ['Pay App', /pay ?app|payment application|billing|invoice|\bsov\b|schedule of values|g70[23]|lien waiver|retention|retainage/i, 'PAY APP', '01 COST CONTROL'],
+  ['Submittal', /submittal|shop drawing|product data|cut sheet|\bsub[- ]?\d/i, 'SUBMITTAL', '14 SUBMITTALS'],
+  ['Design Change', /bulletin|\basi\b|\bccd\b|\bdcn\b|design change|ifc set change|revision \d|addend/i, 'DESIGN CHANGE', '04 DESIGN CHANGES'],
+  ['Procurement', /purchase order|\bpo\s?#|\bmrf\b|material request|\bquote\b|quotation|release letter|delivery ticket|packing slip|\bbom\b/i, 'PROCUREMENT', '09 PROCUREMENT LOG'],
+  ['Contract', /subcontract|contract|agreement|exhibit [a-z]\b|scope of work|\bsow\b|insurance cert|\bcoi\b|bond/i, 'CONTRACT', '01 COST CONTROL'],
+  ['Proposal', /proposal|estimate|\bbid\b|takeoff|take-off/i, 'PROPOSAL', '01 COST CONTROL'],
+  ['Schedule', /schedule|look-?ahead|gantt|\bcpm\b|milestone|\bp6\b/i, 'SCHEDULE', '06 SCHEDULE'],
+  ['Specification', /specification|\bspecs?\b|section \d{2}\s?\d{2}/i, 'SPEC', '05 SPECIFICATIONS'],
+  ['BIM', /\bbim\b|revit|navisworks|clash|\.(rvt|nwd|nwc|ifc)$/i, 'BIM', '02 BIM'],
+  ['Drawing', /drawing|\bdwg\b|\bplans?\b|sheet [a-z]+-?\d|single.?line|\bsld\b|elevation|layout|\.(dwg|dxf)$/i, 'DWG', '03 CONSTRUCTION SET'],
+  ['Closeout', /closeout|close-out|o&m|operation and maintenance|as-?built|warranty|attic stock|training/i, 'CLOSEOUT', '11 CLOSEOUTS'],
+  ['Safety', /safety|\bjha\b|\bjsa\b|toolbox|incident|osha|\bppe\b|energy control|lockout/i, 'SAFETY', '13 SAFETY'],
+  ['Prefab', /prefab|pre-fab|assembly drawing|kitting/i, 'PREFAB', '15 PREFAB'],
+  ['Photo', /\.(jpe?g|png|heic|webp)$|photo|picture/i, 'PHOTO', '08 JOB SITE PHOTOS'],
+  ['Inspection', /inspection|permit|test report|\bneta\b|punch ?list|certificate/i, 'INSPECTION', '10 CORRESPONDENCE'],
+  ['Meeting Minutes', /minutes|meeting notes|\boac\b|agenda/i, 'MINUTES', '10 CORRESPONDENCE'],
+  ['Daily Report', /daily (report|log)|dailies|field report|manpower/i, 'DAILY', '10 CORRESPONDENCE'],
+  ['Correspondence', /letter|memo|email|notice|correspondence/i, 'LETTER', '10 CORRESPONDENCE'],
+];
+export const CATEGORIES = Object.fromEntries(TYPES.map(([c, re]) => [c, re]));
+export const CATEGORY_NAMES = [...TYPES.map(([c]) => c), 'General'];
+export const CATEGORY_FOLDERS = { ...Object.fromEntries(TYPES.map(([c, , , f]) => [c, f])), General: '' };
+const TYPE_LABEL = { ...Object.fromEntries(TYPES.map(([c, , l]) => [c, l])), General: 'DOC' };
+
+export const CONTROL_DIR = 'Zordon';
+export const INBOX = `${CONTROL_DIR}/_Inbox`;
+export const UNFILED = `${CONTROL_DIR}/_Unfiled`;
+export const projectsDir = () => process.env.ZORDON_PROJECTS_DIR ?? '5. PROJECTS';
+
 const TEXT_EXT = new Set(['.txt', '.md', '.csv', '.eml', '.html', '.htm', '.json', '.xml', '.log']);
-const RANDOM_NAME_RE = /^(scan|img|image|dsc|document|doc|untitled|new|file|copy|download|final|draft|asdf|test|temp|screenshot)?[\s_-]*\(?\d*\)?$/i;
+const RANDOM_NAME_RE = /^(scan|img|image|dsc|document|doc|untitled|new|file|copy|download|final|draft|asdf|test|temp|screenshot|book)?[\s_-]*\(?\d*\)?$/i;
+const SMALL = new Set(['a', 'an', 'and', 'at', 'by', 'for', 'from', 'in', 'of', 'on', 'or', 'the', 'to', 'with']);
 
-export function slug(text, max = 60) {
-  return String(text || '')
-    .normalize('NFKD').replace(/[̀-ͯ]/g, '')
-    .replace(/[^\w\s-]/g, ' ').trim().split(/[\s_-]+/).filter(Boolean)
-    .map((w) => (w.length > 3 && w === w.toUpperCase() ? w : w[0].toUpperCase() + w.slice(1)))
-    .join('-').slice(0, max).replace(/-+$/, '');
+// Safe on Windows and OneDrive: no \ / : * ? " < > | # %, no trailing dots or spaces.
+export function cleanName(text, max = 80) {
+  return String(text || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[\\/:*?"<>|#%]+/g, ' ').replace(/[_\s]+/g, ' ').trim().slice(0, max).replace(/[ .]+$/, '');
+}
+
+// "beam penetration at c4" → "Beam Penetration at C4"; keeps acronyms and numbers as written.
+export function titleCase(text, max = 70) {
+  return cleanName(text, max).split(' ').filter(Boolean).map((w, i) => {
+    if (/[A-Z].*[A-Z]|\d/.test(w)) return w;
+    const lower = w.toLowerCase();
+    return i > 0 && SMALL.has(lower) ? lower : lower[0].toUpperCase() + lower.slice(1);
+  }).join(' ');
+}
+
+// Kept for older callers: hyphenated title-case slug.
+export const slug = (text, max = 60) => titleCase(String(text || '').replace(/[^\w\s-]+/g, ' '), max).split(/[\s-]+/).filter(Boolean).join('-');
+
+export function shortName(project) {
+  if (!project) return '';
+  if (project.short_name) return cleanName(project.short_name, 24).toUpperCase();
+  const words = cleanName(project.name, 60).toUpperCase().split(' ').filter((w) => !['THE', 'OF', 'AND', '-', '/'].includes(w));
+  return words.slice(0, 3).join(' ');
 }
 
 export function projectFolder(project) {
-  if (!project) return 'Unfiled';
-  return slug([project.code, project.name].filter(Boolean).join(' '), 80) || `Project-${project.id}`;
+  if (!project) return UNFILED;
+  const job = cleanName(project.code || project.name || `Project ${project.id}`, 40);
+  return projectsDir() ? `${projectsDir()}/${job}` : job;
 }
+
+export const usDate = (iso) => { const [y, m, d] = iso.split('-'); return `${m}.${d}.${y}`; };
 
 export function textSnippet(buffer, filename) {
   if (!buffer || !TEXT_EXT.has(extname(filename || '').toLowerCase())) return '';
@@ -67,29 +94,49 @@ export function suggestHeuristic({ filename = '', text = '', project_id, hint = 
   const project = projects.find((p) => p.id === Number(project_id))
     || projects.find((p) => (p.code && hay.toLowerCase().includes(p.code.toLowerCase())) || hay.toLowerCase().includes(p.name.toLowerCase()))
     || null;
-  const category = Object.entries(CATEGORIES).find(([, re]) => re.test(hay) || re.test(filename))?.[0] || 'General';
+  const category = TYPES.find(([, re]) => re.test(hay) || re.test(filename))?.[0] || 'General';
 
   // Prefer: the user's hint, then a meaningful filename, then the first meaningful line of text.
   const firstLine = text.split(/\r?\n/).map((l) => l.replace(/^(subject|re|fw|title)\s*:\s*/i, '').trim())
     .find((l) => l.length > 6 && l.length < 120 && /[a-z]/i.test(l)) || '';
   const meaningful = base && !RANDOM_NAME_RE.test(base.trim()) && /[a-z]{3,}/i.test(base) ? base : '';
   let title = hint || meaningful || firstLine || `${category} document`;
-  // Avoid repeating the category or project code in the descriptive part.
-  title = title.replace(new RegExp(`\\b${category}\\b`, 'i'), '').replace(project?.code ? new RegExp(project.code, 'i') : /$^/, '');
-  title = slug(title) || slug(category);
-  return finalize({ title, category, project, ext: extname(filename).toLowerCase(), today });
+  return finalize({ title: title || category, category, project, ext: extname(filename).toLowerCase(), today });
+}
+
+const escapeRe = (t) => String(t).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// Split "RFI 14 response beam at C4" into the document number and the description,
+// dropping words already in the file name (job number, project name, short name, type).
+export function describe(title, category, project) {
+  let t = ` ${cleanName(title, 160)} `;
+  for (const w of [project?.code, project?.name, project?.short_name, project && shortName(project)].filter(Boolean)) {
+    t = t.replace(new RegExp(escapeRe(cleanName(w)), 'ig'), ' ');
+  }
+  t = t.replace(/^[\s\-–—_:]+/, '');
+  const typeWords = [TYPE_LABEL[category], category, ...(category === 'COR' ? ['PCO', 'PCI', 'CO', 'Change Order'] : []), ...(category === 'Submittal' ? ['Sub'] : [])];
+  t = t.replace(new RegExp(`^(${typeWords.map(escapeRe).join('|')})\\b[\\s:#-]*`, 'i'), '');
+  let number = '';
+  const m = t.match(/^#?\s*(\d[\w.]*(?:-\d[\w.]*)?)\b[\s:-]*/);
+  if (m) { number = m[1]; t = t.slice(m[0].length); }
+  t = t.replace(/\s+[-–—]\s+[-–—]\s+/g, ' - ').replace(/^[\s\-–—_:]+|[\s\-–—_:]+$/g, '');
+  return { number, desc: titleCase(t) };
 }
 
 export function finalize({ title, category, project, ext, today }) {
-  const code = project?.code ? slug(project.code, 20) : project ? `P${project.id}` : 'GEN';
-  const cat = slug(category, 30);
-  const filename = `${today}_${code}_${cat}_${slug(title)}${ext || ''}`;
+  const { number, desc: d } = describe(title, category, project);
+  const label = `${TYPE_LABEL[category] || 'DOC'}${number ? ` ${number}` : ''}`;
+  const desc = d || titleCase(category);
+  const date = usDate(today);
+  const prefix = project ? `${cleanName(project.code || project.name, 40)}${shortName(project) ? `_${shortName(project)}` : ''} - ` : '';
+  const sub = CATEGORY_FOLDERS[category] || '';
+  const folder = project ? [projectFolder(project), sub].filter(Boolean).join('/') : UNFILED;
   return {
-    title: slug(title).replace(/-/g, ' '),
+    title: `${label} - ${desc}`, // e.g. "RFI 14 - Beam at C4"; re-filing keeps the number
     category,
     project_id: project?.id ?? null,
-    folder: `${projectFolder(project)}/${CATEGORY_FOLDERS[category] || CATEGORY_FOLDERS.General}`,
-    filename,
+    folder,
+    filename: `${prefix}${label} - ${desc} (${date})${ext || ''}`,
   };
 }
 
@@ -141,7 +188,7 @@ export async function uniquePath(root, folder, filename, exists) {
   const ext = extname(filename);
   const stem = filename.slice(0, filename.length - ext.length);
   for (let i = 1; ; i++) {
-    const name = i === 1 ? filename : `${stem}_v${i}${ext}`;
+    const name = i === 1 ? filename : `${stem} v${i}${ext}`;
     const rel = `${folder}/${name}`;
     if (!(await exists(vaultPath(root, rel)))) return rel;
   }
@@ -159,12 +206,13 @@ export async function moveFile(root, fromRel, toRel) {
   await rename(vaultPath(root, fromRel), to);
 }
 
+// Creates the GEC2 job start-up folders for a real job (only when asked; never for demo projects).
 export async function ensureProjectFolders(root, project) {
-  for (const folder of [...new Set(Object.values(CATEGORY_FOLDERS))]) {
-    await mkdir(vaultPath(root, projectFolder(project), folder), { recursive: true });
-  }
+  for (const folder of JOB_TEMPLATE) await mkdir(vaultPath(root, projectFolder(project), folder), { recursive: true });
   await mkdir(vaultPath(root, INBOX), { recursive: true });
 }
+
+export const isJobNumber = (code) => /^G\d{4}$/i.test(String(code || '').trim());
 
 // Files dropped in _Inbox (by Claude, a scanner, "Save as…") that are done being written.
 export async function inboxFiles(root, settleMs = 10_000) {

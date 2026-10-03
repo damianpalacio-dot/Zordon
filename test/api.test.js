@@ -73,14 +73,15 @@ test('upload names and files a document; rename moves it', async () => {
   const up = await fetch(`${base}/api/documents?filename=scan001.txt&hint=${encodeURIComponent('RFI 14 beam at C4')}&project_id=1`, {
     method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: 'RFI response text',
   }).then((r) => r.json());
-  assert.match(up.path, /^AGM-101-Angel-Grove-Medical-Office\/04-RFIs\/2026-10-03_AGM-101_RFI_/);
+  assert.equal(up.path, '5. PROJECTS/AGM-101/07 RFIS/AGM-101_ANGEL GROVE MEDICAL - RFI 14 - Beam at C4 (10.03.2026).txt');
   assert.equal(await readFile(join(vaultRoot, up.path), 'utf8'), 'RFI response text');
   const moved = await call(`/api/documents/${up.id}`, { method: 'PATCH', body: { category: 'Correspondence' } });
-  assert.match(moved.body.path, /12-Correspondence/);
-  const proj = await call('/api/projects/1', { method: 'PATCH', body: { name: 'Angel Grove Clinic' } });
+  assert.match(moved.body.path, /^5\. PROJECTS\/AGM-101\/10 CORRESPONDENCE\/AGM-101_ANGEL GROVE MEDICAL - LETTER - RFI 14 - Beam at C4 /);
+  // The job folder follows the job number; renaming the job number moves the folder and keeps links working.
+  const proj = await call('/api/projects/1', { method: 'PATCH', body: { code: 'G9999' } });
   assert.equal(proj.status, 200);
   const doc = (await call('/api/documents')).body.find((d) => d.id === up.id);
-  assert.match(doc.path, /^AGM-101-Angel-Grove-Clinic\//);
+  assert.match(doc.path, /^5\. PROJECTS\/G9999\/10 CORRESPONDENCE\//);
   assert.equal(await readFile(join(vaultRoot, doc.path), 'utf8'), 'RFI response text');
   const file = await fetch(`${base}/api/documents/${up.id}/file`).then((r) => r.text());
   assert.equal(file, 'RFI response text');

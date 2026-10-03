@@ -13,8 +13,10 @@ import { connectorStatus, syncAll } from './connectors.js';
 import { createVoiceSession, greeting, say, FAREWELL } from './voice.js';
 import { projectWeather } from './weather.js';
 import { leadTime, createElectricalPlan, LEAD_TIMES } from './electrical.js';
+import { loadBuiltinSkills, listSkills, saveSkill, createJob, listJobs, syncControl, importJobResult, filingRules,
+  importProposal, decideProposal, listProposals } from './claude.js';
 import { CATEGORY_NAMES, CATEGORY_FOLDERS, suggestName, finalize, textSnippet, uniquePath, saveFile, moveFile, deleteFile, vaultPath,
-  ensureProjectFolders, inboxFiles, readVaultFile, projectFolder } from './vault.js';
+  ensureProjectFolders, inboxFiles, readVaultFile, projectFolder, isJobNumber, JOB_TEMPLATE, CONTROL_DIR, INBOX } from './vault.js';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const STATIC_DIRS = {
@@ -158,7 +160,7 @@ export async function fileDocument(db, vaultRoot, { buffer, fromRel, filename, p
 }
 
 // A batch of already-analyzed emails, written to the vault's _Inbox by the hourly Claude email check.
-// { "type": "zordon.emails", "auto_accept": true, "projects": [{ name, code, location }], "emails": [{ message_id, sender, subject, received_at, summary, body,
+// { "type": "zordon.emails", "auto_accept": true, "projects": [{ name, code, short_name, location }], "emails": [{ message_id, sender, subject, received_at, summary, body,
 //   tasks: [{ title, owner, project, due_date, priority }], meetings: [{ title, starts_at, location, project }] }] }
 export function importEmailBatch(db, batch, today = isoDate()) {
   if (batch?.type !== 'zordon.emails' || !Array.isArray(batch.emails)) throw new Error('Not a zordon.emails batch');
@@ -168,7 +170,7 @@ export function importEmailBatch(db, batch, today = isoDate()) {
     if (!p?.name) continue;
     const exists = db.prepare('SELECT id FROM projects WHERE (code IS NOT NULL AND lower(code) = lower(?)) OR lower(name) = lower(?)').get(p.code || '', p.name);
     if (!exists) {
-      db.prepare('INSERT INTO projects (name, code, location) VALUES (?, ?, ?)').run(String(p.name), p.code || null, p.location || null);
+      db.prepare('INSERT INTO projects (name, code, short_name, location) VALUES (?, ?, ?, ?)').run(String(p.name), p.code || null, p.short_name || null, p.location || null);
       result.new_projects++;
     }
   }
@@ -207,15 +209,29 @@ export async function writeRoster(db, vaultRoot) {
     updated_at: new Date().toISOString(),
     me: db.prepare('SELECT name, email FROM people WHERE id = ?').get(mePersonId(db) ?? -1) || null,
     people: db.prepare('SELECT name, role, trade, email FROM people WHERE active = 1').all(),
-    projects: db.prepare("SELECT name, code, location FROM projects WHERE status != 'closed'").all(),
+    projects: db.prepare("SELECT name, code, short_name, location FROM projects WHERE status != 'closed'").all(),
   };
-  await saveFile(vaultRoot, 'zordon-roster.json', Buffer.from(JSON.stringify(roster, null, 2)), { overwrite: true });
+  await saveFile(vaultRoot, `${CONTROL_DIR}/zordon-roster.json`, Buffer.from(JSON.stringify(roster, null, 2)), { overwrite: true });
 }
+
+const categoryForPath = (path) => Object.entries(CATEGORY_FOLDERS).find(([, f]) => f && path.includes(`/${f}/`))?.[0] || 'General';
 
 export async function processInbox(db, vaultRoot, today = isoDate()) {
   const filed = [];
   for (const f of await inboxFiles(vaultRoot)) {
     try {
+      if (/\.proposal\.zordon\.json$/i.test(f.name)) {
+        importProposal(db, JSON.parse((await readVaultFile(vaultRoot, f.rel)).toString('utf8')));
+        await moveFile(vaultRoot, f.rel, `${f.rel.replace(/[^/]+$/, '')}.imported/${f.name}`);
+        console.log(`[claude] new proposal: ${f.name}`);
+        continue;
+      }
+      if (/\.result\.zordon\.json$/i.test(f.name)) {
+        const r = await importJobResult(db, vaultRoot, JSON.parse((await readVaultFile(vaultRoot, f.rel)).toString('utf8')), { categoryFor: categoryForPath });
+        await moveFile(vaultRoot, f.rel, `${f.rel.replace(/[^/]+$/, '')}.imported/${f.name}`);
+        console.log(`[claude] job #${r.job_id} ${r.status} (${r.outputs} file(s))`);
+        continue;
+      }
       if (/\.zordon\.json$/i.test(f.name)) {
         const result = importEmailBatch(db, JSON.parse((await readVaultFile(vaultRoot, f.rel)).toString('utf8')), today);
         await moveFile(vaultRoot, f.rel, `${f.rel.replace(/[^/]+$/, '')}.imported/${f.name}`);
@@ -276,14 +292,15 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
     ['GET', '/api/projects', () => projectSummaries(db, today())],
     ['POST', '/api/projects', async ({ body }) => {
       required(body.name, 'name');
-      const id = db.prepare('INSERT INTO projects (name, code, location) VALUES (?, ?, ?)').run(body.name, body.code || null, body.location || null).lastInsertRowid;
+      const id = db.prepare('INSERT INTO projects (name, code, short_name, location) VALUES (?, ?, ?, ?)').run(body.name, body.code || null, body.short_name || null, body.location || null).lastInsertRowid;
       const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
-      await ensureProjectFolders(vaultRoot, project).catch((err) => console.warn(`[vault] ${err.message}`));
+      // Real GEC2 jobs (G####) get the job start-up folders; other projects are left alone.
+      if (isJobNumber(project.code)) await ensureProjectFolders(vaultRoot, project).catch((err) => console.warn(`[vault] ${err.message}`));
       return project;
     }],
     ['PATCH', '/api/projects/:id', async ({ params, body }) => {
       const before = mustExist(db.prepare('SELECT * FROM projects WHERE id = ?').get(Number(params.id)), 'Project');
-      const f = pick(body, ['name', 'code', 'location', 'status']);
+      const f = pick(body, ['name', 'code', 'short_name', 'location', 'status']);
       oneOf(f.status, ['active', 'on_hold', 'closed'], 'status');
       if ('location' in f) Object.assign(f, { lat: null, lon: null }); // re-geocode for weather
       update(db, 'projects', params.id, f);
@@ -389,11 +406,11 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
       return filed.map(({ id, analyzer }) => ({ ...getDoc(id), analyzer }));
     }],
     ['POST', '/api/vault/folders', async () => {
-      const projects = db.prepare("SELECT * FROM projects WHERE status != 'closed'").all();
+      const projects = db.prepare("SELECT * FROM projects WHERE status != 'closed'").all().filter((p) => isJobNumber(p.code));
       for (const p of projects) await ensureProjectFolders(vaultRoot, p);
-      return { root: vaultRoot, projects: projects.map((p) => projectFolder(p)), folders: Object.values(CATEGORY_FOLDERS) };
+      return { root: vaultRoot, projects: projects.map((p) => projectFolder(p)), folders: JOB_TEMPLATE };
     }],
-    ['GET', '/api/vault', () => ({ root: vaultRoot, inbox: join(vaultRoot, '_Inbox'), folders: Object.values(CATEGORY_FOLDERS) })],
+    ['GET', '/api/vault', () => ({ root: vaultRoot, inbox: join(vaultRoot, INBOX), projects_dir: join(vaultRoot, projectFolder({ code: '<Job #>' })), folders: JOB_TEMPLATE })],
     ['GET', '/api/documents/:id/file', ({ params }) => {
       const d = getDoc(params.id);
       return { __file: vaultPath(vaultRoot, d.path), name: d.path.split('/').pop(), mime: d.mime };
@@ -506,6 +523,43 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
       if ('active' in f) f.active = f.active ? 1 : 0;
       update(db, 'routines', params.id, f);
       return db.prepare('SELECT * FROM routines WHERE id = ?').get(Number(params.id));
+    }],
+
+    // ----- Claude Link: skills library and jobs for Claude (Cowork) -----
+    ['GET', '/api/claude/skills', () => listSkills(db)],
+    ['PUT', '/api/claude/skills/:name', async ({ params, body }) => {
+      let skill;
+      try { skill = saveSkill(db, { ...body, name: params.name }); } catch (err) { throw new HttpError(400, err.message); }
+      await syncControl(db, vaultRoot).catch((err) => console.warn(`[claude] sync: ${err.message}`));
+      return skill;
+    }],
+    ['DELETE', '/api/claude/skills/:name', ({ params }) => {
+      const s = mustExist(db.prepare('SELECT * FROM skills WHERE name = ?').get(params.name), 'Skill');
+      if (s.builtin) throw new HttpError(400, 'Starter skills can be edited but not deleted');
+      db.prepare('DELETE FROM skills WHERE name = ?').run(s.name);
+      return { deleted: true };
+    }],
+    ['GET', '/api/claude/jobs', () => listJobs(db)],
+    ['POST', '/api/claude/jobs', async ({ body }) => {
+      let job;
+      try { job = createJob(db, body); } catch (err) { throw new HttpError(400, err.message); }
+      await syncControl(db, vaultRoot).catch((err) => console.warn(`[claude] sync: ${err.message}`));
+      return job;
+    }],
+    ['POST', '/api/claude/jobs/:id/cancel', async ({ params }) => {
+      db.prepare("UPDATE claude_jobs SET status = 'cancelled', finished_at = datetime('now') WHERE id = ? AND status IN ('queued', 'needs_input')").run(Number(params.id));
+      const j = db.prepare('SELECT * FROM claude_jobs WHERE id = ?').get(Number(params.id));
+      await deleteFile(vaultRoot, `${CONTROL_DIR}/jobs/${String(j.id).padStart(4, '0')}-${j.skill}.json`).catch(() => {});
+      return j;
+    }],
+    ['GET', '/api/claude/filing', () => ({ markdown: filingRules(db) })],
+    ['GET', '/api/claude/proposals', () => listProposals(db)],
+    ['POST', '/api/claude/proposals/:id/:decision', async ({ params }) => {
+      if (!['approve', 'dismiss'].includes(params.decision)) throw new HttpError(404, 'Not found');
+      let p;
+      try { p = decideProposal(db, params.id, params.decision === 'approve', today()); } catch (err) { throw new HttpError(400, err.message); }
+      await syncControl(db, vaultRoot).catch((err) => console.warn(`[claude] sync: ${err.message}`));
+      return p;
     }],
 
     ['GET', '/api/reminders/drafts', () => reminderDrafts(db, today())],
@@ -644,10 +698,11 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   setInterval(cycle, Number(process.env.ZORDON_SYNC_MINUTES || 30) * 60_000).unref();
   // File anything saved into the vault's _Inbox folder every minute (documents, and hourly email batches).
   const vaultRoot = process.env.ZORDON_VAULT || join(ROOT, 'files');
+  await loadBuiltinSkills(db);
+  await syncControl(db, vaultRoot).catch((err) => console.warn(`[claude] sync: ${err.message}`));
   const roster = () => writeRoster(db, vaultRoot).catch((err) => console.warn(`[vault] roster: ${err.message}`));
   roster();
   setInterval(roster, 15 * 60_000).unref();
-  for (const p of db.prepare("SELECT * FROM projects WHERE status != 'closed'").all()) await ensureProjectFolders(vaultRoot, p).catch(() => {});
   setInterval(() => processInbox(db, vaultRoot).then((f) => f.length && console.log(`[vault] filed ${f.length} file(s) from _Inbox`)), 60_000).unref();
   createServer(createApp(db, { voice })).listen(port, () => {
     console.log(`\n  ⚡ Zordon Command Center online → http://localhost:${port}`);

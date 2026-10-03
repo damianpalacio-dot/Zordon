@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS projects (
   name TEXT NOT NULL,
   code TEXT,
   location TEXT,
+  short_name TEXT,
   lat REAL,
   lon REAL,
   status TEXT NOT NULL DEFAULT 'active'
@@ -163,6 +164,41 @@ CREATE TABLE IF NOT EXISTS routines (
   last_due TEXT,
   active INTEGER NOT NULL DEFAULT 1
 );
+CREATE TABLE IF NOT EXISTS skills (
+  name TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  description TEXT,
+  output_category TEXT,
+  body TEXT NOT NULL,
+  builtin INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS claude_jobs (
+  id INTEGER PRIMARY KEY,
+  task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+  project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+  skill TEXT NOT NULL,
+  instructions TEXT,
+  inputs TEXT NOT NULL DEFAULT '[]',
+  output_folder TEXT,
+  complete_task INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'queued',
+  result_note TEXT,
+  outputs TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  finished_at TEXT
+);
+CREATE TABLE IF NOT EXISTS proposals (
+  id INTEGER PRIMARY KEY,
+  kind TEXT NOT NULL,
+  skill TEXT,
+  title TEXT NOT NULL,
+  evidence TEXT NOT NULL DEFAULT '[]',
+  rule TEXT,
+  body TEXT,
+  status TEXT NOT NULL DEFAULT 'open',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 CREATE INDEX IF NOT EXISTS idx_tasks_owner ON tasks(owner_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_due ON tasks(due_date);
 CREATE INDEX IF NOT EXISTS idx_meetings_start ON meetings(starts_at);
@@ -179,7 +215,7 @@ export function openDb(file = process.env.ZORDON_DB || 'data/zordon.db') {
 
 // Columns added after the first release; CREATE TABLE IF NOT EXISTS won't add them to older databases.
 const ADDED_COLUMNS = {
-  projects: { lat: 'REAL', lon: 'REAL' },
+  projects: { lat: 'REAL', lon: 'REAL', short_name: 'TEXT' },
   tasks: { estimate_hours: 'REAL' },
   routines: { day_of_month: 'INTEGER' },
   emails: { message_id: 'TEXT' },

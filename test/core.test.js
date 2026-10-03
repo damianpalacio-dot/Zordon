@@ -171,14 +171,23 @@ test('routines create weekly and monthly tasks once', () => {
 });
 
 test('file names follow the convention', () => {
-  const projects = [{ id: 1, name: 'Angel Grove Medical Office', code: 'AGM-101' }];
-  const s = suggestHeuristic({ filename: 'scan0042.pdf', hint: 'Beam penetration at C4', text: '' }, { projects, today: TODAY });
+  const projects = [
+    { id: 1, name: 'Burbank Airport SWA Terminal', code: 'G2707', short_name: 'BURB RPT' },
+    { id: 2, name: '32nd St / USC Magnet', code: 'G3251', short_name: '32ND ST' },
+  ];
+  const name = (x) => suggestHeuristic(x, { projects, today: TODAY });
+  const s = name({ filename: 'scan0042.pdf', hint: 'Beam penetration at C4', text: '' });
   assert.equal(s.category, 'General');
-  const rfi = suggestHeuristic({ filename: 'IMG_1234.pdf', hint: 'RFI 14 response beam at C4 AGM-101', text: '' }, { projects, today: TODAY });
-  assert.equal(rfi.category, 'RFI');
+  assert.equal(s.folder, 'Zordon/_Unfiled');
+  const rfi = name({ filename: 'IMG_1234.pdf', hint: 'RFI 14 response beam penetration at C4 G2707' });
   assert.equal(rfi.project_id, 1);
-  assert.equal(rfi.folder, 'AGM-101-Angel-Grove-Medical-Office/04-RFIs');
-  assert.match(rfi.filename, /^2026-10-03_AGM-101_RFI_.+\.pdf$/);
+  assert.equal(rfi.folder, '5. PROJECTS/G2707/07 RFIS');
+  assert.equal(rfi.filename, 'G2707_BURB RPT - RFI 14 - Response Beam Penetration at C4 (10.03.2026).pdf');
+  assert.equal(name({ filename: 'COR 073 CA#291-5777.pdf', project_id: 1 }).filename, 'G2707_BURB RPT - COR 073 - CA 291-5777 (10.03.2026).pdf');
+  const sub = name({ filename: 'G3251 - 32nd St - Spec 26 2416 Sub 01 - Panelboards Siemens.pdf' });
+  assert.equal(sub.folder, '5. PROJECTS/G3251/14 SUBMITTALS');
+  assert.equal(sub.filename, 'G3251_32ND ST - SUBMITTAL - Spec 26 2416 Sub 01 - Panelboards Siemens (10.03.2026).pdf');
+  assert.equal(name({ filename: 'x.pdf', hint: 'Pay app 6 backup', project_id: 2 }).folder, '5. PROJECTS/G3251/01 COST CONTROL');
   assert.equal(slug('Pay app #6 — backup (final)'), 'Pay-App-6-Backup-Final');
 });
 
@@ -186,17 +195,17 @@ test('_Inbox files are renamed and filed', async () => {
   const db = freshDb();
   const root = await mkdtemp(join(tmpdir(), 'zordon-vault-'));
   const { mkdir } = await import('node:fs/promises');
-  await mkdir(join(root, '_Inbox'));
-  const file = join(root, '_Inbox', 'Document (3).txt');
+  await mkdir(join(root, 'Zordon', '_Inbox'), { recursive: true });
+  const file = join(root, 'Zordon', '_Inbox', 'Document (3).txt');
   await writeFile(file, 'Subject: Change order 7 pricing for AGM-101 added outlets\n');
   const old = new Date(Date.now() - 60_000);
   await utimes(file, old, old);
   const filed = await processInbox(db, root, TODAY);
   assert.equal(filed.length, 1);
   const doc = db.prepare('SELECT * FROM documents WHERE id = ?').get(filed[0].id);
-  assert.equal(doc.category, 'Change Order');
-  assert.match(doc.path, /^AGM-101-Angel-Grove-Medical-Office\/02-Change-Orders\/2026-10-03_AGM-101_Change-Order_/);
-  assert.deepEqual(await readdir(join(root, '_Inbox')), []);
+  assert.equal(doc.category, 'COR');
+  assert.match(doc.path, /^5\. PROJECTS\/AGM-101\/01 COST CONTROL\/AGM-101_ANGEL GROVE MEDICAL - COR 7 - Pricing for Added Outlets \(10\.03\.2026\)\.txt$/);
+  assert.deepEqual(await readdir(join(root, 'Zordon', '_Inbox')), []);
 });
 
 test('weather impacts flag crane, rain, heat and freeze days', () => {
@@ -282,14 +291,14 @@ test('email batch files dropped in _Inbox are imported, not filed as documents',
   const db = freshDb();
   const root = await mkdtemp(join(tmpdir(), 'zordon-batch-'));
   const { mkdir } = await import('node:fs/promises');
-  await mkdir(join(root, '_Inbox'));
-  const file = join(root, '_Inbox', 'emails-2026-10-03T1500.zordon.json');
+  await mkdir(join(root, 'Zordon', '_Inbox'), { recursive: true });
+  const file = join(root, 'Zordon', '_Inbox', 'emails-2026-10-03T1500.zordon.json');
   await writeFile(file, JSON.stringify({ type: 'zordon.emails', emails: [{ message_id: 'x1', subject: 'Hi', tasks: [{ title: 'Send panel schedule' }] }] }));
   const old = new Date(Date.now() - 60_000);
   await utimes(file, old, old);
   assert.deepEqual(await processInbox(db, root, TODAY), []);
   assert.ok(db.prepare("SELECT id FROM tasks WHERE title = 'Send panel schedule'").get());
-  assert.deepEqual(await readdir(join(root, '_Inbox')), ['.imported']);
+  assert.deepEqual(await readdir(join(root, 'Zordon', '_Inbox')), ['.imported']);
 });
 
 test('team-only emails end with a Zordon quote; outside emails stay plain', async () => {
