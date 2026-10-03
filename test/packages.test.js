@@ -117,3 +117,15 @@ test('demo data is replaced by the OneDrive roster once it can be found', async 
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n, 0);
   assert.equal(await seedFromRoster(db, root), false); // real data is never replaced
 });
+
+test('finds the GEC2 OneDrive without a path in .env', async () => {
+  const { detectVault } = await import('../server/vault.js');
+  const home = await mkdtemp(join(tmpdir(), 'zordon-home-'));
+  await mkdir(join(home, 'OneDrive'), { recursive: true }); // personal OneDrive: no roster
+  await mkdir(join(home, 'OneDrive - GECTWO', 'Zordon'), { recursive: true });
+  await writeFile(join(home, 'OneDrive - GECTWO', 'Zordon', 'zordon-roster.json'), '{}');
+  assert.equal((await detectVault({}, home)).path, join(home, 'OneDrive - GECTWO'));
+  // A wrong or quoted path in .env still falls through to the real one.
+  assert.equal((await detectVault({ ZORDON_VAULT: '"C:\\nope"' }, home)).path, join(home, 'OneDrive - GECTWO'));
+  assert.equal((await detectVault({ ZORDON_VAULT: `"${join(home, 'OneDrive - GECTWO')}\\"` }, home)).found, 'roster');
+});

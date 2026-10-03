@@ -3,7 +3,8 @@
 //   e.g. 5. PROJECTS/G2707/07 RFIS/G2707_BURB RPT - RFI - Beam Penetration At C4 (10.03.2026).pdf
 // ZORDON_VAULT points at the OneDrive root; Zordon's own files live in <root>/Zordon.
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { dirname, extname, resolve, sep } from 'node:path';
+import { dirname, extname, join, resolve, sep } from 'node:path';
+import { homedir } from 'node:os';
 import { isoDate } from './db.js';
 import { aiEnabled } from './intel.js';
 
@@ -304,3 +305,19 @@ export async function deleteFile(root, rel) {
   await rm(vaultPath(root, rel), { force: true });
 }
 
+
+// Find the GEC2 OneDrive without the user typing a path. Tries ZORDON_VAULT (also with a stray "quotes" or trailing
+// slash), Windows' own OneDrive variables, then every "OneDrive…" folder in the user's home folder.
+// Prefers the one that holds Zordon/zordon-roster.json, then one with the projects folder.
+export async function detectVault(env = process.env, home = homedir()) {
+  const clean = (p) => String(p || '').trim().replace(/^["']|["']$/g, '').replace(/[\\/]+$/, '');
+  const candidates = [clean(env.ZORDON_VAULT), clean(env.OneDriveCommercial), clean(env.OneDrive)];
+  for (const e of await readdir(home, { withFileTypes: true }).catch(() => [])) {
+    if (e.isDirectory() && /^onedrive/i.test(e.name)) candidates.push(join(home, e.name));
+  }
+  const unique = [...new Set(candidates.filter(Boolean))];
+  const has = (dir, ...rel) => stat(join(dir, ...rel)).then(() => true, () => false);
+  for (const dir of unique) if (await has(dir, CONTROL_DIR, 'zordon-roster.json')) return { path: dir, found: 'roster', tried: unique };
+  for (const dir of unique) if (await has(dir, projectsDir() || '.')) return { path: dir, found: 'projects', tried: unique };
+  return { path: clean(env.ZORDON_VAULT) || null, found: null, tried: unique };
+}

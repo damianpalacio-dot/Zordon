@@ -18,7 +18,7 @@ import { leadTime, createElectricalPlan, LEAD_TIMES } from './electrical.js';
 import { loadBuiltinSkills, listSkills, saveSkill, createJob, listJobs, syncControl, importJobResult, filingRules,
   importProposal, decideProposal, listProposals } from './claude.js';
 import { CATEGORY_NAMES, CATEGORY_FOLDERS, suggestName, finalize, textSnippet, uniquePath, saveFile, moveFile, deleteFile, vaultPath,
-  ensureProjectFolders, inboxFiles, readVaultFile, projectFolder, isJobNumber, JOB_TEMPLATE, CONTROL_DIR, INBOX, findJobFolder, refineFolder } from './vault.js';
+  ensureProjectFolders, inboxFiles, readVaultFile, projectFolder, isJobNumber, JOB_TEMPLATE, CONTROL_DIR, INBOX, findJobFolder, refineFolder, detectVault } from './vault.js';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const STATIC_DIRS = {
@@ -367,7 +367,7 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
     ['POST', '/api/voice/goodbye', () => voice.goodbye()],
     ['POST', '/api/voice/say', ({ body }) => ({ spoken: say(required(body.text, 'text')) })],
     ['GET', '/api/meta', () => ({ statuses: STATUSES, priorities: PRIORITIES, colors: RANGER_COLORS, ai: aiEnabled(), today: today(),
-      demo: db.prepare("SELECT value FROM settings WHERE key = 'demo_data'").get()?.value === 'true', vault_set: Boolean(process.env.ZORDON_VAULT) })],
+      demo: db.prepare("SELECT value FROM settings WHERE key = 'demo_data'").get()?.value === 'true', vault_set: Boolean(process.env.ZORDON_VAULT), vault: process.env.ZORDON_VAULT || null })],
     ['GET', '/api/dashboard', () => {
       runRoutines(db, today());
       return {
@@ -825,11 +825,13 @@ export function createApp(db, opts = {}) {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const db = openDb();
-  const vaultRootForSeed = process.env.ZORDON_VAULT || join(ROOT, 'files');
-  if (!process.env.ZORDON_VAULT) console.warn('ZORDON_VAULT is not set in .env — Zordon cannot see your OneDrive and will show demo data.');
-  else if (!await stat(join(process.env.ZORDON_VAULT, CONTROL_DIR, 'zordon-roster.json')).catch(() => null)) {
-    console.warn(`No Zordon/zordon-roster.json under ${process.env.ZORDON_VAULT} — check that ZORDON_VAULT is your GEC2 OneDrive folder.`);
+  const vault = await detectVault();
+  if (vault.path && vault.path !== process.env.ZORDON_VAULT) console.log(`Using OneDrive folder: ${vault.path}`);
+  if (vault.path) process.env.ZORDON_VAULT = vault.path;
+  if (vault.found !== 'roster') {
+    console.warn(`Could not find Zordon/zordon-roster.json. Looked in: ${vault.tried.join(' | ') || '(nothing)'}`);
   }
+  const vaultRootForSeed = process.env.ZORDON_VAULT || join(ROOT, 'files');
   if (await seedFromRoster(db, vaultRootForSeed)) console.log('Loaded your team and jobs from Zordon/zordon-roster.json.');
   else if (process.env.ZORDON_SEED !== 'off' && seedIfEmpty(db)) console.log('Seeded demo data (set ZORDON_SEED=off to skip).');
   const voice = createVoiceSession();

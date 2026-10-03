@@ -81,8 +81,8 @@ export async function refreshRefs() {
   if (banner) {
     banner.hidden = !meta.demo;
     banner.textContent = meta.vault_set
-      ? 'DEMO DATA: Zordon can\'t find Zordon/zordon-roster.json in your OneDrive. Check ZORDON_VAULT in .env, then restart Zordon.'
-      : 'DEMO DATA: set ZORDON_VAULT in the .env file to your GEC2 OneDrive folder, then restart Zordon. Your real team and jobs replace this automatically.';
+      ? `DEMO DATA: Zordon is looking in "${meta.vault}" but can't find Zordon\\zordon-roster.json there. Set ZORDON_VAULT in .env to the folder that holds "5. PROJECTS" and "Zordon", then restart.`
+      : 'DEMO DATA: Zordon could not find your GEC2 OneDrive. Make sure OneDrive is signed in and synced, or set ZORDON_VAULT in .env, then restart Zordon.';
   }
   return store;
 }
