@@ -4,7 +4,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { timingSafeEqual } from 'node:crypto';
-import { openDb, seedIfEmpty, isoDate, STATUSES, PRIORITIES, RANGER_COLORS } from './db.js';
+import { openDb, seedIfEmpty, isoDate, addDays, STATUSES, PRIORITIES, RANGER_COLORS } from './db.js';
 import { analyzeEmail, aiEnabled, resolveRefs } from './intel.js';
 import { moneyPriority, dashboard, listTasks, getTask, listMeetings, projectSummaries, reminderDrafts, realityCheck, myNudges } from './ops.js';
 import { WATCH_GROUPS, parseNotificationEmail, upsertItems, listItems, docControlSummary, getSetting, setSetting, mePersonId } from './doccontrol.js';
@@ -12,6 +12,7 @@ import { importSchedule, lookahead, equipmentLog, runRoutines } from './schedule
 import { connectorStatus, syncAll } from './connectors.js';
 import { createVoiceSession, greeting, say, FAREWELL } from './voice.js';
 import { projectWeather } from './weather.js';
+import { scanOld, applyPlan, listArchiveLogs, undoArchive } from './cleanup.js';
 import { leadTime, createElectricalPlan, LEAD_TIMES } from './electrical.js';
 import { loadBuiltinSkills, listSkills, saveSkill, createJob, listJobs, syncControl, importJobResult, filingRules,
   importProposal, decideProposal, listProposals } from './claude.js';
@@ -94,6 +95,7 @@ async function ingestEmail(db, body, today) {
     today,
   };
   const { analyzer, ...analysis } = await analyzeEmail(email, ctx);
+  applyVip(email, analysis.tasks, vipSenders(db), today);
   const { lastInsertRowid } = db.prepare('INSERT INTO emails (sender, subject, body, received_at, analysis, analyzer) VALUES (?, ?, ?, ?, ?, ?)')
     .run(email.sender, email.subject, email.body, body.received_at || new Date().toISOString(), JSON.stringify(analysis), analyzer);
   const id = Number(lastInsertRowid);
@@ -184,9 +186,11 @@ export function importEmailBatch(db, batch, today = isoDate()) {
   const people = db.prepare('SELECT id, name, email FROM people WHERE active = 1').all();
   const projects = db.prepare('SELECT id, name, code FROM projects').all();
   const seen = db.prepare('SELECT id FROM emails WHERE message_id = ?');
+  const vips = vipSenders(db);
   for (const e of batch.emails) {
     if (e.message_id && seen.get(String(e.message_id))) { result.duplicates++; continue; }
     const tasks = (e.tasks || []).filter((t) => t?.title).map((t) => resolveRefs(t, people, projects));
+    applyVip(e, tasks, vips, today);
     const meetings = (e.meetings || []).filter((m) => m?.title && m?.starts_at).map((m) => resolveRefs(m, people, projects));
     for (const t of tasks) {
       if (!PRIORITIES.includes(t.priority)) t.priority = 'medium';
@@ -236,6 +240,8 @@ export async function seedFromRoster(db, vaultRoot) {
   const ids = people.map((p, i) => Number(insertPerson.run(String(p.name), p.role || 'Team', p.trade || null, p.email || null, colors[i % colors.length]).lastInsertRowid));
   const me = roster.me?.email && people.findIndex((p) => String(p.email || '').toLowerCase() === roster.me.email.toLowerCase());
   db.prepare("INSERT INTO settings (key, value) VALUES ('me_person_id', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(ids[me >= 0 ? me : 0]));
+  const vip = people.filter((p) => p.vip && p.email).map((p) => p.email.toLowerCase());
+  if (vip.length) db.prepare("INSERT INTO settings (key, value) VALUES ('vip_senders', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(vip));
   const insertProject = db.prepare('INSERT INTO projects (name, code, short_name, folder, location, status) VALUES (?, ?, ?, ?, ?, ?)');
   for (const p of Array.isArray(roster.projects) ? roster.projects : []) {
     if (!p?.name) continue;
@@ -251,6 +257,27 @@ export async function seedFromRoster(db, vaultRoot) {
   routine.run('Review equipment release log', 'Confirm release-by dates against the current schedule and chase open submittals blocking releases.', meId, 3, null, 0.5);
   routine.run('Review change order log — push pending CORs to approval', 'Chase owner/GC approvals, price open PCOs, convert approved COs into billing.', meId, 5, null, 1);
   routine.run('Submit monthly pay applications (billing)', 'Update SOVs and stored materials, collect lien waivers, submit pay apps for every active job.', meId, 1, 20, 3);
+  return true;
+}
+
+// VIP senders (Damian's leadership and back office): their email always becomes at least a High task.
+export const DEFAULT_VIPS = ['honor@gec2.com', 'dawn@gec2.com', 'greg@gec2.com', 'tyson@gec2.com', 'lizeth@gec2.com'];
+export function vipSenders(db) {
+  const row = db.prepare("SELECT value FROM settings WHERE key = 'vip_senders'").get();
+  return new Set((row ? JSON.parse(row.value) : DEFAULT_VIPS).map((x) => String(x).toLowerCase().trim()));
+}
+const RANK = { low: 0, medium: 1, high: 2, critical: 3 };
+const nextWorkday = (iso) => { let d = addDays(iso, 1); while ([0, 6].includes(new Date(`${d}T12:00`).getDay())) d = addDays(d, 1); return d; };
+
+export function applyVip(email, tasks, vips, today = isoDate()) {
+  const sender = String(email.sender || '').toLowerCase().match(/[\w.+-]+@[\w.-]+/)?.[0] || '';
+  if (!vips.has(sender)) return false;
+  for (const t of tasks) if ((RANK[t.priority] ?? 1) < RANK.high) t.priority = 'high';
+  if (!tasks.length && email.subject) {
+    const who = sender.split('@')[0].replace(/^\w/, (c) => c.toUpperCase());
+    tasks.push({ title: `Read & respond to ${who}: ${String(email.subject).replace(/^(re|fw|fwd):\s*/gi, '').slice(0, 150)}`, priority: 'high', due_date: nextWorkday(today), owner_id: null, project_id: null });
+  }
+  email.vip = true;
   return true;
 }
 
@@ -468,6 +495,20 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
       for (const p of projects) await ensureProjectFolders(vaultRoot, p);
       return { root: vaultRoot, projects: projects.map((p) => projectFolder(p)), folders: JOB_TEMPLATE };
     }],
+    // ----- Archive old files (moves only, logged, undoable) -----
+    ['POST', '/api/cleanup/scan', async ({ body }) => {
+      const areas = (Array.isArray(body.areas) ? body.areas : ['root', 'documents', 'projects']).filter((a) => ['root', 'documents', 'projects'].includes(a));
+      const cutoff = /^\d{4}-\d{2}-\d{2}$/.test(body.cutoff || '') ? body.cutoff : '2025-01-01';
+      const plan = await scanOld(vaultRoot, { areas, cutoff });
+      return { ...plan, items: plan.items.slice(0, 1000) };
+    }],
+    ['POST', '/api/cleanup/apply', async ({ body }) => {
+      try { return await applyPlan(vaultRoot, required(body.plan_id, 'plan_id')); } catch (err) { throw new HttpError(400, err.message); }
+    }],
+    ['GET', '/api/cleanup/logs', () => listArchiveLogs(vaultRoot)],
+    ['POST', '/api/cleanup/undo', async ({ body }) => {
+      try { return await undoArchive(vaultRoot, required(body.log, 'log')); } catch (err) { throw new HttpError(400, err.message); }
+    }],
     ['GET', '/api/vault', () => ({ root: vaultRoot, inbox: join(vaultRoot, INBOX), projects_dir: join(vaultRoot, projectFolder({ code: '<Job #>' })), folders: JOB_TEMPLATE })],
     ['GET', '/api/documents/:id/file', ({ params }) => {
       const d = getDoc(params.id);
@@ -518,10 +559,11 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
       me_person_id: mePersonId(db),
       capacity_hours_per_day: getSetting(db, 'capacity_hours_per_day', 4),
       watch_groups: getSetting(db, 'watch_groups', WATCH_GROUPS.map((g) => g.key)),
+      vip_senders: [...vipSenders(db)],
       all_groups: WATCH_GROUPS.map(({ key, label }) => ({ key, label })),
     })],
     ['PATCH', '/api/settings', ({ body }) => {
-      for (const k of ['me_person_id', 'capacity_hours_per_day', 'watch_groups', 'team_domain']) if (k in body) setSetting(db, k, body[k]);
+      for (const k of ['me_person_id', 'capacity_hours_per_day', 'watch_groups', 'team_domain', 'vip_senders']) if (k in body) setSetting(db, k, body[k]);
       return { ok: true };
     }],
 

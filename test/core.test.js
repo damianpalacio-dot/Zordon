@@ -403,3 +403,20 @@ test('first start loads the real team and jobs from the OneDrive roster', async 
   assert.equal(await seedFromRoster(db, root), false, 'never runs twice');
   assert.equal(await seedFromRoster(openDb(':memory:'), await mkdtemp(join(tmpdir(), 'zordon-none-'))), false, 'no roster, no seed');
 });
+
+test('VIP senders (Honor, Dawn, Greg, Tyson, Liz) always become at least High tasks', async () => {
+  const { importEmailBatch, applyVip, vipSenders } = await import('../server/index.js');
+  const db = freshDb();
+  const r = importEmailBatch(db, { type: 'zordon.emails', emails: [
+    { message_id: 'v1', sender: 'Dawn Mastorakis <Dawn@gec2.com>', subject: 'End dates', tasks: [] },
+    { message_id: 'v2', sender: 'tyson@gec2.com', subject: 'Re: Fairfax', tasks: [{ title: 'Send Tyson the Fairfax update', priority: 'low' }] },
+    { message_id: 'v3', sender: 'someone@vendor.com', subject: 'Newsletter', tasks: [] },
+  ] }, TODAY);
+  assert.equal(r.tasks, 2);
+  const dawn = db.prepare("SELECT * FROM tasks WHERE title LIKE 'Read & respond to Dawn%'").get();
+  assert.equal(dawn.title, 'Read & respond to Dawn: End dates');
+  assert.equal(dawn.priority, 'high');
+  assert.equal(dawn.due_date, '2026-10-05', 'next workday after a Saturday is Monday');
+  assert.equal(db.prepare("SELECT priority FROM tasks WHERE title LIKE 'Send Tyson%'").get().priority, 'high');
+  assert.equal(applyVip({ sender: 'x@y.com', subject: 'hi' }, [], vipSenders(db)), false);
+});

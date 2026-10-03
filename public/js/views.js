@@ -532,6 +532,19 @@ async function vault(el, params, { render }) {
         <div id="helper-out" style="margin-top:10px"></div>
       </section>
     </div>
+    <section class="panel" style="margin-top:16px">
+      <header><h2>🧹 Archive old files</h2><span class="small dim">moves only · logged · one-click undo</span></header>
+      <p class="small muted">Files last saved before the cutoff move to <span class="mono">_ARCHIVE pre-YYYY/&lt;same path&gt;</span>. Job folders move only when nothing inside them has been touched since the cutoff, so active jobs stay whole. Zordon, 00 Cowork Claude and templates are never touched.</p>
+      <div class="row" style="margin:8px 0">
+        <label class="row small"><input type="checkbox" data-area="root" checked> OneDrive root loose files</label>
+        <label class="row small"><input type="checkbox" data-area="documents" checked> Documents</label>
+        <label class="row small"><input type="checkbox" data-area="projects" checked> Inactive job folders</label>
+        <label class="field">Cutoff<input type="date" id="cutoff" value="2025-01-01"></label>
+        <button class="btn" id="scan">🔍 Scan</button>
+      </div>
+      <div id="scan-out"></div>
+      <div id="archive-logs" class="small" style="margin-top:8px"></div>
+    </section>
     <div class="filters" style="margin-top:18px">
       <select data-f="project_id">${options(store.projects, f.project_id, { empty: 'All projects' })}</select>
       <select data-f="category">${options(categories, f.category, { empty: 'All types', value: (c) => c, text: (c) => c })}</select>
@@ -548,6 +561,33 @@ async function vault(el, params, { render }) {
         <td><div class="row" style="flex-wrap:nowrap"><button class="btn sm" data-dl>Open</button><button class="btn sm danger" data-rm>✕</button></div></td></tr>`).join('') || '<tr><td colspan="6" class="dim">No files yet.</td></tr>'}</tbody>
     </table></div>`;
 
+  const fmtBytes = (b) => (b > 1e9 ? `${(b / 1e9).toFixed(1)} GB` : b > 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.round(b / 1e3)} KB`);
+  const showLogs = async () => {
+    const logs = await api('/api/cleanup/logs').catch(() => []);
+    el.querySelector('#archive-logs').innerHTML = logs.length ? `Past runs: ${logs.slice(0, 5).map((l) => `<span class="mono">${esc(l.split('/').pop())}</span> <button class="btn sm ghost" data-undo="${esc(l)}">Undo</button>`).join(' · ')}` : '';
+    wire(el, '[data-undo]', 'click', (_e, n) => confirm('Move everything from this run back where it was?') && guard(async () => {
+      const r = await api('/api/cleanup/undo', { method: 'POST', body: { log: n.dataset.undo } });
+      toast(`Restored ${r.restored} item(s)`); showLogs();
+    }));
+  };
+  showLogs();
+  el.querySelector('#scan').addEventListener('click', () => guard(async () => {
+    const out = el.querySelector('#scan-out');
+    out.innerHTML = '<div class="small dim">Scanning… (large OneDrives take a minute)</div>';
+    const areas = [...el.querySelectorAll('[data-area]:checked')].map((c) => c.dataset.area);
+    const plan = await api('/api/cleanup/scan', { method: 'POST', body: { areas, cutoff: el.querySelector('#cutoff').value } });
+    const names = { root: 'Root loose files', documents: 'Documents', projects: 'Inactive job folders' };
+    out.innerHTML = `<div class="row">${plan.summary.filter((x) => areas.includes(x.area)).map((x) => `<span class="pill">${names[x.area]}: ${x.count} · ${fmtBytes(x.bytes)}</span>`).join('')}</div>
+      <div class="table-wrap" style="max-height:320px;overflow:auto;margin-top:8px"><table style="min-width:600px"><thead><tr><th>Item</th><th>Last saved</th><th>Size</th></tr></thead><tbody>
+      ${plan.items.slice(0, 300).map((i) => `<tr><td class="mono">${i.kind === 'folder' ? '📁 ' : ''}${esc(i.from)}</td><td>${esc(i.modified)}</td><td>${fmtBytes(i.size)}</td></tr>`).join('') || '<tr><td colspan="3" class="dim">Nothing to archive.</td></tr>'}
+      </tbody></table></div>${plan.total > 300 ? `<div class="small dim">…and ${plan.total - 300} more</div>` : ''}
+      ${plan.total ? `<button class="btn gold" id="do-archive" style="margin-top:8px">📦 Move ${plan.total} item(s) to ${esc(plan.archive)}</button>` : ''}`;
+    out.querySelector('#do-archive')?.addEventListener('click', () => confirm(`Move ${plan.total} item(s) into ${plan.archive}? You can undo this.`) && guard(async () => {
+      const r = await api('/api/cleanup/apply', { method: 'POST', body: { plan_id: plan.plan_id } });
+      out.innerHTML = `<div class="suggest">Moved ${r.moved} item(s).${r.failed.length ? ` ${r.failed.length} could not be moved (open in another app?).` : ''} Log: <span class="mono">${esc(r.log)}</span></div>`;
+      showLogs();
+    }));
+  }));
   el.querySelector('#mk-folders').addEventListener('click', () => guard(async () => {
     const r = await api('/api/vault/folders', { method: 'POST', body: {} });
     toast(`Folder structure ready for ${r.projects.length} project(s)`);
