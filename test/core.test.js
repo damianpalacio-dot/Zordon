@@ -209,7 +209,7 @@ test('_Inbox files are renamed and filed', async () => {
   assert.equal(filed.length, 1);
   const doc = db.prepare('SELECT * FROM documents WHERE id = ?').get(filed[0].id);
   assert.equal(doc.category, 'COR');
-  assert.match(doc.path, /^5\. PROJECTS\/AGM-101\/01 COST CONTROL\/AGM-101_ANGEL GROVE MEDICAL - COR 7 - Pricing for Added Outlets \(10\.03\.2026\)\.txt$/);
+  assert.match(doc.path, /^5\. PROJECTS\/AGM-101\/01 COST CONTROL\/CHANGE ORDERS\/COR 007 - Pricing for Added Outlets\/AGM-101_ANGEL GROVE MEDICAL - COR 7 - Pricing for Added Outlets \(10\.03\.2026\)\.txt$/);
   assert.deepEqual(await readdir(join(root, 'Zordon', '_Inbox')), []);
 });
 

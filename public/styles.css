@@ -367,3 +367,5 @@ pre.reminder { white-space: pre-wrap; background: #08101b; border: 1px solid var
   .two, .three { grid-template-columns: 1fr; }
   .check-row .form-grid { grid-template-columns: 1fr 1fr; }
 }
+
+.pkg-stages { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 10px; }

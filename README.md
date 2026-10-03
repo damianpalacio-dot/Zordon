@@ -89,6 +89,26 @@ name on the Projects page. Zordon only creates job start-up folders for real G##
 **The `_Inbox` habit:** save anything into `OneDrive/Zordon/_Inbox` and Zordon names it and files it within a minute.
 The same folder carries the hourly email batches, Claude job results and habit proposals.
 
+### Change order and submittal packages
+
+Every COR and every submittal gets its own folder, with a numbered stage folder for each step:
+
+```
+01 COST CONTROL/CHANGE ORDERS/COR 073 - Ice and Water Machine Power/
+    01 BACKUP  02 T&M  03 QUOTES  04 WORKUP  05 SUBMITTED  06 APPROVED  07 BILLED
+14 SUBMITTALS/26 24 16 Panelboards/
+    01 VENDOR DATA  02 GEC2 REVIEW  03 SUBMITTED  04 RETURNED  05 APPROVED  06 RELEASED  07 CLOSEOUT
+```
+
+- Start one on **RFIs & Submittals → Start a package**, or drop a file in `_Inbox` with the COR number or spec section in
+  its name ("COR 73 Graybar quote", "26 24 16 panelboards approved"). Zordon creates the folder and files the
+  document in the right stage.
+- Existing folders are reused, even under older names (`Change Request 073`, `262416 PANELBOARDS`), and so are
+  their `Quotes`, `T&M` and `ENDSHEET` folders.
+- Each stage puts the next step on your list. A submitted COR gets a GC follow-up in 7 days, and an approved COR gets
+  "Bill on the next pay app" (Critical). A returned submittal gets revise-and-resubmit, and an approved one gets
+  "Release equipment". Packages only move forward when you file; set any stage by hand from the board.
+
 ## Claude Link (Cowork)
 
 Zordon hands skilled work to your Claude in Cowork through OneDrive:
@@ -168,7 +188,7 @@ Zordon is built to run on your own computer. Before you put it on a server or op
 
 ```bash
 npm run dev    # restart on file changes
-npm test       # 23 tests: parsing, scheduling, doc control, naming, API
+npm test       # 42 tests: parsing, scheduling, doc control, naming, packages, archive, API
 ```
 
 - `server/`: zero-framework Node HTTP server. SQLite via Node's built-in `node:sqlite` (`data/zordon.db`).

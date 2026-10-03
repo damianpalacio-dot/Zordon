@@ -119,6 +119,20 @@ CREATE TABLE IF NOT EXISTS tracked_items (
   first_seen_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS packages (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,
+  number TEXT,
+  spec_section TEXT,
+  title TEXT NOT NULL,
+  folder TEXT,
+  stage TEXT NOT NULL,
+  amount REAL,
+  history TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL

@@ -3,6 +3,7 @@
 //   Zordon/skills/<name>/       the team's skill library (SKILL.md each), editable from Zordon
 //   Zordon/jobs/<id>-<skill>.json   work for Claude to do
 //   Zordon/_Inbox/job-<id>.result.zordon.json   Claude's report back
+import { STAGES } from './packages.js';
 import { readdir, readFile, rm } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
@@ -74,6 +75,22 @@ ${rows}
 | Anything else | the job folder itself |
 
 Unknown job? Save to \`Zordon/_Unfiled\` and say so.
+
+## Change order and submittal packages
+
+Every change order and every submittal gets its own folder with numbered stage subfolders. Put each file in the stage
+it belongs to; the stage tells everyone where the package stands.
+
+\`01 COST CONTROL/CHANGE ORDERS/COR 073 - Ice and Water Machine Power/\`
+${STAGES.cor.map(([name, what]) => `- \`${name}\`: ${what}`).join('\n')}
+
+\`14 SUBMITTALS/26 24 16 Panelboards/\` (spec section, then the title)
+${STAGES.submittal.map(([name, what]) => `- \`${name}\`: ${what}`).join('\n')}
+
+Reuse an existing folder for the same COR number or spec section, even under an older name (\`Change Request 073\`,
+\`262416 PANELBOARDS\`), and its existing \`Quotes\`, \`T&M\` or \`ENDSHEET\` folders. COR numbers are 3 digits (\`COR 073\`).
+Mention the COR number or spec section and the stage word (quote, T&M, workup, submitted, approved, billed, returned,
+released, O&M) in the file name so Zordon can track it.
 
 ## File names
 

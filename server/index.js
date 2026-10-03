@@ -13,6 +13,7 @@ import { connectorStatus, syncAll } from './connectors.js';
 import { createVoiceSession, greeting, say, FAREWELL } from './voice.js';
 import { projectWeather } from './weather.js';
 import { scanOld, applyPlan, listArchiveLogs, undoArchive } from './cleanup.js';
+import { STAGES, packageType, stageFor, ensurePackage, stageFolder, specKey, recordPackage, setStage, listPackages } from './packages.js';
 import { leadTime, createElectricalPlan, LEAD_TIMES } from './electrical.js';
 import { loadBuiltinSkills, listSkills, saveSkill, createJob, listJobs, syncControl, importJobResult, filingRules,
   importProposal, decideProposal, listProposals } from './claude.js';
@@ -154,17 +155,36 @@ export async function fileDocument(db, vaultRoot, { buffer, fromRel, filename, p
     : suggestion;
   // Use the folder that best describes the document (the team's own subfolders count).
   const project = ctx.projects.find((p) => p.id === chosen.project_id);
+  const hay = `${hint || ''} ${title || ''} ${filename} ${chosen.title}`;
+  let pkg = null;
   if (project) {
     const full = db.prepare('SELECT * FROM projects WHERE id = ?').get(project.id);
-    chosen.folder = await refineFolder(vaultRoot, chosen.folder, projectFolder(full), `${hint || ''} ${title || ''} ${filename} ${chosen.title}`);
+    pkg = await packageFor(db, vaultRoot, full, chosen, hay, today);
+    chosen.folder = pkg ? pkg.folder : await refineFolder(vaultRoot, chosen.folder, projectFolder(full), hay);
   }
   const rel = await uniquePath(vaultRoot, chosen.folder, chosen.filename, fileExists);
   if (fromRel) await moveFile(vaultRoot, fromRel, rel);
   else await saveFile(vaultRoot, rel, content);
+  if (pkg?.stage) setStage(db, pkg.id, pkg.stage, { today, me: mePersonId(db), addTask: (t) => createTask(db, t) });
   const id = db.prepare(`INSERT INTO documents (project_id, task_id, title, category, original_name, path, size, mime, notes)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(chosen.project_id, task_id ? Number(task_id) : null, chosen.title, chosen.category,
     filename, rel, content.length, mime || null, notes || null).lastInsertRowid;
   return { id: Number(id), analyzer: suggestion.analyzer };
+}
+
+// A COR with a number, or a submittal with a spec section, goes into its own package folder and stage:
+// 01 COST CONTROL/CHANGE ORDERS/COR 073 - <title>/05 SUBMITTED. Returns null for everything else.
+async function packageFor(db, vaultRoot, project, chosen, hay, today) {
+  const type = packageType(chosen.category);
+  if (!type) return null;
+  const desc = chosen.title.replace(/^[A-Z ]+?(\s[\w.-]*\d[\w.-]*)?\s-\s/, '');
+  const number = type === 'cor' ? chosen.title.match(/^COR (\d+)\b/)?.[1] : null;
+  const spec_section = type === 'submittal' ? specKey(hay) : null;
+  if (type === 'cor' ? !number : !spec_section) return null;
+  const folder = await ensurePackage(vaultRoot, projectFolder(project), type, { number, spec_section, title: desc });
+  const stage = stageFor(type, hay);
+  const rec = recordPackage(db, { project_id: project.id, type, number, spec_section, title: desc, folder }, today);
+  return { id: rec.id, stage, folder: await stageFolder(vaultRoot, folder, stage) };
 }
 
 // A batch of already-analyzed emails, written to the vault's _Inbox by the hourly Claude email check.
@@ -543,6 +563,32 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
       await deleteFile(vaultRoot, d.path);
       db.prepare('DELETE FROM documents WHERE id = ?').run(d.id);
       return { deleted: true };
+    }],
+
+    // ----- Change order & submittal packages -----
+    ['GET', '/api/packages', ({ query }) => ({
+      packages: listPackages(db, { ...query, open: query.open === '1' }),
+      stages: Object.fromEntries(Object.entries(STAGES).map(([k, v]) => [k, v.map(([name, what]) => ({ name, what }))])),
+    })],
+    // Start a package by hand: creates the folder with every stage subfolder and starts tracking it.
+    ['POST', '/api/packages', async ({ body }) => {
+      const type = required(['cor', 'submittal'].includes(body.type) ? body.type : null, 'type (cor or submittal)');
+      const project = mustExist(db.prepare('SELECT * FROM projects WHERE id = ?').get(Number(body.project_id)), 'Project');
+      if (type === 'cor' && !/^\d+$/.test(String(body.number || '').trim())) throw Object.assign(new Error('COR number is required'), { status: 400 });
+      if (type === 'submittal' && !specKey(body.spec_section)) throw Object.assign(new Error('Spec section is required (e.g. 26 24 16)'), { status: 400 });
+      const info = { number: String(body.number || '').trim(), spec_section: body.spec_section, title: required(body.title, 'title') };
+      const folder = await ensurePackage(vaultRoot, projectFolder(project), type, info);
+      const pkg = recordPackage(db, { project_id: project.id, type, ...info, folder, amount: body.amount ? Number(body.amount) : null }, today());
+      return body.stage ? setStage(db, pkg.id, body.stage, { today: today(), me: mePersonId(db), addTask: (t) => createTask(db, t) }).package : pkg;
+    }],
+    ['PATCH', '/api/packages/:id', ({ params, body }) => {
+      if (body.amount !== undefined) db.prepare('UPDATE packages SET amount = ? WHERE id = ?').run(body.amount === '' ? null : Number(body.amount), Number(params.id));
+      return setStage(db, Number(params.id), body.stage ?? mustExist(db.prepare('SELECT stage FROM packages WHERE id = ?').get(Number(params.id)), 'Package').stage,
+        { force: true, today: today(), me: mePersonId(db), addTask: (t) => createTask(db, t) });
+    }],
+    ['DELETE', '/api/packages/:id', ({ params }) => {
+      db.prepare('DELETE FROM packages WHERE id = ?').run(Number(params.id));
+      return { deleted: true, note: 'Stopped tracking. The folder and its files were left in place.' };
     }],
 
     // ----- Doc control: RFIs & submittals -----

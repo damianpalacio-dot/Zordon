@@ -62,7 +62,8 @@ async function projects(el, _p, { render }) {
 async function doccontrol(el, params, { render }) {
   const f = Object.fromEntries(params);
   const qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString();
-  const [summary, items, settings] = await Promise.all([api('/api/doccontrol'), api(`/api/items?${qs}`), api('/api/settings')]);
+  const [summary, items, settings, pk] = await Promise.all([api('/api/doccontrol'), api(`/api/items?${qs}`), api('/api/settings'),
+    api(`/api/packages?open=1${f.project_id ? `&project_id=${f.project_id}` : ''}`)]);
   const set = (k, v) => { const n = new URLSearchParams(f); if (v) n.set(k, v); else n.delete(k); location.hash = `#/doccontrol?${n}`; };
   const groupLabel = Object.fromEntries(summary.groups.map((g) => [g.key, g.label.split(' — ')[0]]));
   el.innerHTML = `
@@ -79,6 +80,7 @@ async function doccontrol(el, params, { render }) {
       <section class="panel"><header><h2>In your court</h2></header><div class="list">${summary.in_my_court.map(row).join('') || '<div class="empty">Nothing waiting on you.</div>'}</div></section>
       <section class="panel"><header><h2>New this week (watched)</h2></header><div class="list">${summary.new_this_week.map(row).join('') || '<div class="empty">No new items.</div>'}</div></section>
     </div>
+    ${packagesPanel(pk)}
     <div class="filters">
       <select data-f="type">${options([{ id: 'rfi', name: 'RFIs' }, { id: 'submittal', name: 'Submittals' }], f.type, { empty: 'RFIs & submittals' })}</select>
       <select data-f="project_id">${options(store.projects, f.project_id, { empty: 'All projects' })}</select>
@@ -135,6 +137,16 @@ async function doccontrol(el, params, { render }) {
     toast(results.map((r) => `${r.name}: ${r.error ? `error — ${r.error}` : r.skipped || `${r.fetched} items, ${r.changes.length} changes`}`).join(' · '));
     render();
   }));
+  wire(el, '[data-stage]', 'change', (_e, n) => guard(async () => {
+    const res = await api(`/api/packages/${n.dataset.stage}`, { method: 'PATCH', body: { stage: n.value } });
+    toast(res.task_id ? `Moved to ${n.value} — next step added to your list` : `Moved to ${n.value}`);
+    render();
+  }));
+  el.querySelector('#new-pkg').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const body = formData(e.target);
+    guard(async () => { const p = await api('/api/packages', { method: 'POST', body }); toast(`Folder ready: ${p.folder}`); render(); });
+  });
   el.querySelector('#add-item').addEventListener('submit', (e) => {
     e.preventDefault();
     const body = formData(e.target);
@@ -142,6 +154,34 @@ async function doccontrol(el, params, { render }) {
     body.source = 'manual';
     guard(async () => { await api('/api/items', { method: 'POST', body }); toast('Item added'); render(); });
   });
+}
+
+// Change order and submittal packages: one folder each, moved stage by stage from start to billed / closeout.
+function packagesPanel({ packages, stages }) {
+  const lane = (type, heading) => {
+    const list = packages.filter((p) => p.type === type);
+    return `<section class="panel"><header><h2>${heading}</h2><span class="small dim">${list.length} open</span></header>
+      <div class="pkg-stages">${stages[type].map((s) => `<span title="${esc(s.what)}" class="pill small ${list.some((p) => p.stage === s.name) ? 'h-due_soon' : ''}">${esc(s.name)} · ${list.filter((p) => p.stage === s.name).length}</span>`).join('')}</div>
+      <div class="list">${list.map((p) => `<div class="item">
+        <span class="pill">${type === 'cor' ? `COR ${esc(p.number)}` : esc(p.spec_section)}</span>
+        <div class="grow"><div class="title">${esc(p.title)}${p.amount ? ` <span class="mono" style="color:var(--gold)">$${Number(p.amount).toLocaleString()}</span>` : ''}</div>
+          <div class="small dim mono">${esc(p.project_code || p.project_name || '')} · ${esc(p.folder || '')}</div></div>
+        <select data-stage="${p.id}">${stages[type].map((s) => `<option ${s.name === p.stage ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>
+      </div>`).join('') || '<div class="empty">None open. File a document with its number, or start one below.</div>'}</div></section>`;
+  };
+  return `<div class="grid two" style="margin-bottom:16px">${lane('cor', '💲 Change orders')}${lane('submittal', '📦 Submittal packages')}</div>
+    <section class="panel" style="margin-bottom:16px"><h2>Start a package</h2>
+      <p class="small muted">Creates the folder with every stage inside (CORs: 01 BACKUP → 07 BILLED; submittals: 01 VENDOR DATA → 07 CLOSEOUT).
+        Files you drop in <span class="mono">Zordon/_Inbox</span> with the COR number or spec section land in the right stage, and each stage puts the next step on your list.</p>
+      <form class="form-grid" id="new-pkg" style="margin-top:10px">
+        <label class="field">Type<select name="type"><option value="cor">Change order (COR)</option><option value="submittal">Submittal</option></select></label>
+        <label class="field">Project<select name="project_id" required>${options(store.projects, '', { empty: '—' })}</select></label>
+        <label class="field">COR #<input name="number" placeholder="073"></label>
+        <label class="field">Spec section<input name="spec_section" placeholder="26 24 16"></label>
+        <label class="field">Title<input name="title" required placeholder="Ice and water machine power"></label>
+        <label class="field">Amount ($)<input name="amount" type="number" step="0.01"></label>
+        <button class="btn primary">Create folder</button>
+      </form></section>`;
 }
 
 const row = (i) => `
