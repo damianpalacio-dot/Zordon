@@ -107,7 +107,7 @@ export async function suggestWithClaude(input, ctx) {
     model: process.env.ZORDON_MODEL || 'claude-opus-5-5',
     max_tokens: 1000,
     output_config: { effort: 'low', format: zodOutputFormat(Suggestion) },
-    system: 'You file documents for a construction project manager. Give a short, specific, descriptive title (3-8 words, no dates, no project code, no category word) that someone could recognise months later, pick the best category, and pick the project id from the list or null.',
+    system: 'You file documents for an electrical-focused construction project manager (panel schedules, single-lines, utility letters, arc-flash studies, gear submittals, fire alarm drawings, change orders, pay apps). Give a short, specific, descriptive title (3-8 words, no dates, no project code, no category word) that someone could recognise months later, pick the best category, and pick the project id from the list or null.',
     messages: [{
       role: 'user',
       content: `Projects:\n${projects.map((p) => `${p.id}: ${p.name}${p.code ? ` [${p.code}]` : ''}`).join('\n') || '(none)'}\n\nOriginal filename: ${input.filename || '(none)'}\nUser note: ${input.hint || '(none)'}\nPreferred project id: ${input.project_id ?? '(none)'}\n\nContent excerpt:\n${input.text ? input.text.slice(0, 4000) : '(binary or empty)'}`,

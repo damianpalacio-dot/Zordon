@@ -178,7 +178,7 @@ const kpi = (l, n, cls, href, full = 10) => {
 export const taskRow = (today) => (t) => `
   <div class="item" data-task="${t.id}">
     ${avatar({ name: t.owner_name, color: t.owner_color })}
-    <div class="grow"><div class="title">${t.money ? '💲 ' : ''}${esc(t.title)}</div><div class="sub">${esc(t.project_name || 'No project')}${t.owner_name ? ` · ${esc(t.owner_name)}` : ''}</div></div>
+    <div class="grow"><div class="title">${t.money ? '💲 ' : ''}${t.electrical ? '⚡ ' : ''}${esc(t.title)}</div><div class="sub">${esc(t.project_name || 'No project')}${t.owner_name ? ` · ${esc(t.owner_name)}` : ''}</div></div>
     <span class="pill h-${t.health}">${t.due_date ? relDays(t.due_date, today) : label(t.health)}</span>
   </div>`;
 
@@ -298,7 +298,7 @@ async function boardView(el, params) {
           <tbody>
             ${list.map((t) => `
               <tr data-id="${t.id}">
-                <td class="task h-${t.health}"><div class="t" data-open>${t.money ? '💲 ' : ''}${esc(t.title)}</div>
+                <td class="task h-${t.health}"><div class="t" data-open>${t.money ? '💲 ' : ''}${t.electrical ? '⚡ ' : ''}${esc(t.title)}</div>
                   <div class="small dim">${t.source !== 'manual' ? `from ${esc(t.source)} · ` : ''}${t.health === 'delayed' ? `<b style="color:var(--red)">${t.days_late}d late</b>` : label(t.health)}</div></td>
                 <td><div class="row" style="gap:6px;flex-wrap:nowrap">${avatar(personById(t.owner_id))}
                   <select data-k="owner_id" style="max-width:140px">${options(store.people, t.owner_id, { empty: 'Unassigned' })}</select></div></td>

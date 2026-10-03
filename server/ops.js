@@ -1,15 +1,21 @@
 // Command-center logic: task health, dashboard, briefings and reminder drafts.
 import { addDays, isoDate } from './db.js';
+import { ELECTRICAL_CRITICAL_RE } from './electrical.js';
 
 export const DUE_SOON_DAYS = 2;
 
 // Change orders and billing are cash flow: they never sit at low priority.
 export const MONEY_RE = /\b(change orders?|c\.?o\.? ?#?\d+|pcos?|cors?|change requests?|cor #|pricing|price|pay ?apps?|pay(ment)? applications?|billing|bill|invoices?|g70[23]|retainage|lien waivers?|t&m|time and material)\b/i;
 export const isMoney = (t) => MONEY_RE.test(`${t.title || ''} ${t.description || ''}`);
+export const isElectricalCritical = (t) => ELECTRICAL_CRITICAL_RE.test(t.title || '');
 const RANK = { low: 0, medium: 1, high: 2, critical: 3 };
 
 export function moneyPriority(task, today = isoDate()) {
-  if (!isMoney(task)) return task.priority || 'medium';
+  // Electrical critical path (utility, energization, long-lead gear, inspections) is never below High.
+  if (!isMoney(task)) {
+    const p = task.priority || 'medium';
+    return isElectricalCritical(task) && RANK[p] < RANK.high ? 'high' : p;
+  }
   const floor = task.due_date && task.due_date <= addDays(today, 3) ? 'critical' : 'high';
   return RANK[task.priority] >= RANK[floor] ? task.priority : floor;
 }
@@ -34,7 +40,7 @@ const TASK_SELECT = `SELECT t.*, p.name AS owner_name, p.color AS owner_color, p
 export function decorate(task, today) {
   const money = isMoney(task);
   const priority = task.status === 'done' ? task.priority : moneyPriority(task, today);
-  return { ...task, priority, money, health: taskHealth(task, today), days_late: daysLate(task, today) };
+  return { ...task, priority, money, electrical: isElectricalCritical(task), health: taskHealth(task, today), days_late: daysLate(task, today) };
 }
 
 export function listTasks(db, filters = {}, today = isoDate()) {
@@ -139,6 +145,8 @@ function briefing({ delayed, dueSoon, meetingsToday, team, alert, newEmails, mon
   else if (alert === 'yellow') lines.push('Caution. Some operations need your attention.');
   else lines.push('Alert! Multiple operations are behind schedule. Immediate action is required.');
   const urgentMoney = money.filter((t) => t.due_date && t.due_date <= addDays(today, 3));
+  const sparks = (dueSoon || []).concat(delayed).filter((t) => t.electrical);
+  if (sparks.length) lines.push(`Electrical critical path: "${sparks[0].title}" ${sparks[0].health === 'delayed' ? 'is late' : 'is due within two days'}. Protect the energization date.`);
   if (urgentMoney.length) lines.push(`Cash flow first: ${urgentMoney.map((t) => `"${t.title}"`).slice(0, 2).join(' and ')} ${urgentMoney.length > 1 ? 'are' : 'is'} due within three days.`);
   if (delayed.length) {
     const worst = delayed[0];

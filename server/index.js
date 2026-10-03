@@ -12,6 +12,7 @@ import { importSchedule, lookahead, equipmentLog, runRoutines } from './schedule
 import { connectorStatus, syncAll } from './connectors.js';
 import { createVoiceSession, greeting, say, FAREWELL } from './voice.js';
 import { projectWeather } from './weather.js';
+import { leadTime, createElectricalPlan, LEAD_TIMES } from './electrical.js';
 import { CATEGORY_NAMES, CATEGORY_FOLDERS, suggestName, finalize, textSnippet, uniquePath, saveFile, moveFile, deleteFile, vaultPath,
   ensureProjectFolders, inboxFiles, readVaultFile, projectFolder } from './vault.js';
 
@@ -236,6 +237,14 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
       return after;
     }],
 
+    ['GET', '/api/electrical/lead-time', ({ query }) => leadTime(query.name || '')],
+    ['GET', '/api/electrical/lead-times', () => LEAD_TIMES.map(({ label, weeks, range }) => ({ label, weeks, range }))],
+    ['POST', '/api/projects/:id/electrical-plan', ({ params, body }) => {
+      mustExist(db.prepare('SELECT id FROM projects WHERE id = ?').get(Number(params.id)), 'Project');
+      const energization = dateOrNull(required(body.energization_date, 'energization_date'), 'energization_date');
+      return { created: createElectricalPlan(db, Number(params.id), energization, today()).length };
+    }],
+
     ['GET', '/api/tasks', ({ query }) => listTasks(db, query, today())],
     ['POST', '/api/tasks', ({ body }) => getTask(db, createTask(db, body), today())],
     ['GET', '/api/tasks/:id', ({ params }) => {
@@ -402,6 +411,10 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
     ['POST', '/api/equipment', ({ body }) => {
       required(body.name, 'name');
       const f = pick(body, ['project_id', 'name', 'spec_section', 'vendor', 'submittal_item_id', 'activity_id', 'need_by_date', 'lead_time_weeks', 'buffer_days', 'released_at', 'delivered_at', 'notes']);
+      if (f.lead_time_weeks == null || f.lead_time_weeks === '') {
+        const typical = leadTime(f.name);
+        if (typical) Object.assign(f, { lead_time_weeks: typical.weeks, notes: f.notes || `Typical lead time ${typical.range} wks (${typical.label}) — confirm with vendor` });
+      }
       const keys = Object.keys(f);
       const id = db.prepare(`INSERT INTO equipment (${keys.join(', ')}) VALUES (${keys.map(() => '?').join(', ')})`).run(...keys.map((k) => f[k] === '' ? null : f[k])).lastInsertRowid;
       return equipmentLog(db, {}, today()).find((e) => e.id === Number(id));

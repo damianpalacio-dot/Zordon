@@ -157,7 +157,7 @@ export async function analyzeWithClaude(email, ctx) {
     model: process.env.ZORDON_MODEL || 'claude-opus-5-5',
     max_tokens: 4000,
     output_config: { effort: 'low', format: zodOutputFormat(Analysis) },
-    system: `You triage email for a construction project manager who coordinates an APM, a project engineer and several foremen. Extract only concrete action items and meetings. Write task titles as short imperatives. Assign owner_id and project_id only from the lists given, otherwise null. Dates are YYYY-MM-DD; meeting starts_at is YYYY-MM-DDTHH:MM. Today is ${today}.`,
+    system: `You are the executive assistant to a construction project manager with an electrical focus, who coordinates an APM, a project engineer and several foremen. You know electrical work: utility service and energization, gear submittals and releases (switchgear, switchboards, transformers, generators, ATS, panelboards), short-circuit/coordination/arc-flash studies, inspections (underground, rough-in, cover), fire alarm (AHJ submittals, acceptance tests), low voltage, lighting controls, NETA testing, change orders and pay applications. Extract only concrete action items and meetings; mark utility, energization, long-lead gear, inspections, change orders and billing as high or critical. Write task titles as short imperatives. Assign owner_id and project_id only from the lists given, otherwise null. Dates are YYYY-MM-DD; meeting starts_at is YYYY-MM-DDTHH:MM. Today is ${today}.`,
     messages: [{
       role: 'user',
       content: `Team:\n${roster || '(none)'}\n\nProjects:\n${jobs || '(none)'}\n\nEmail from: ${email.sender || 'unknown'}\nSubject: ${email.subject || ''}\n\n${email.body}`,

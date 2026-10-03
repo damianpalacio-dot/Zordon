@@ -214,3 +214,21 @@ test('voice: a quick reload cancels the farewell and skips the greeting', () => 
   v.goodbye();
   assert.equal(v.hello('hi').reason, 'reload');
 });
+
+test('electrical: lead times, critical-path priority and the energization plan', async () => {
+  const { leadTime, createElectricalPlan, ELECTRICAL_PLAN } = await import('../server/electrical.js');
+  assert.equal(leadTime('Main switchboard MSB').label, 'Switchboard');
+  assert.equal(leadTime('MV switchgear lineup').label, 'Switchgear');
+  assert.equal(leadTime('LP-2A panelboard').label, 'Panelboards');
+  assert.equal(leadTime('Office chairs'), null);
+  assert.equal(moneyPriority({ title: 'Schedule utility energization', priority: 'low' }, TODAY), 'high');
+
+  const db = freshDb();
+  const ids = createElectricalPlan(db, 1, '2027-03-01', TODAY);
+  assert.equal(ids.length, ELECTRICAL_PLAN.length);
+  const energize = db.prepare("SELECT * FROM tasks WHERE source = 'electrical_plan' AND title LIKE 'Energization%'").get();
+  assert.equal(energize.due_date, '2027-03-01');
+  assert.equal(energize.owner_id, db.prepare("SELECT id FROM people WHERE role = 'Project Manager'").get().id);
+  const utility = db.prepare("SELECT * FROM tasks WHERE title LIKE 'Submit utility service%'").get();
+  assert.equal(utility.due_date, '2026-05-05'); // 300 days earlier: already behind, and it shows
+});

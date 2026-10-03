@@ -18,7 +18,7 @@ async function projects(el, _p, { render }) {
           <div class="bar"><span style="width:${p.progress}%"></span></div>
           <div class="row small"><span>${p.progress}% done</span><span class="spacer"></span><span>${p.open} open</span>${p.delayed ? `<span class="pill h-delayed">${p.delayed} late</span>` : ''}</div>
           <div class="row"><a class="btn sm" href="#/board?project_id=${p.id}">Board</a><a class="btn sm" href="#/schedule?project_id=${p.id}">Look-ahead</a>
-            <a class="btn sm" href="#/vault?project_id=${p.id}">Files</a><span class="spacer"></span><button class="btn sm ghost" data-edit="${p.id}">Edit</button></div>
+            <a class="btn sm" href="#/vault?project_id=${p.id}">Files</a><button class="btn sm gold" data-eplan="${p.id}">⚡ Electrical plan</button><span class="spacer"></span><button class="btn sm ghost" data-edit="${p.id}">Edit</button></div>
         </section>`).join('')}
       <section class="panel">
         <h2>New project</h2>
@@ -33,6 +33,16 @@ async function projects(el, _p, { render }) {
   el.querySelector('#new-project').addEventListener('submit', (e) => {
     e.preventDefault();
     guard(async () => { await api('/api/projects', { method: 'POST', body: formData(e.target) }); toast('Project created'); render(); });
+  });
+  wire(el, '[data-eplan]', 'click', (e, n) => {
+    e.stopPropagation();
+    const date = prompt('Target energization (permanent power) date, YYYY-MM-DD.\nZordon schedules the electrical critical path around it: utility, studies, gear releases, inspections, NETA testing, fire alarm acceptance and closeout.');
+    if (!date) return;
+    guard(async () => {
+      const r = await api(`/api/projects/${n.dataset.eplan}/electrical-plan`, { method: 'POST', body: { energization_date: date.trim() } });
+      toast(`Added ${r.created} electrical milestones to the board`);
+      location.hash = `#/board?project_id=${n.dataset.eplan}`;
+    });
   });
   wire(el, '[data-edit]', 'click', (e, n) => {
     e.stopPropagation();
@@ -207,7 +217,7 @@ async function schedule(el, params, { render }) {
             <label class="field">Equipment<input name="name" required placeholder="AHU-1"></label>
             <label class="field">Spec<input name="spec_section" placeholder="23 73 13"></label>
             <label class="field">Vendor<input name="vendor"></label>
-            <label class="field">Lead time (weeks)<input type="number" step="0.5" name="lead_time_weeks" required></label>
+            <label class="field">Lead time (weeks)<input type="number" step="0.5" name="lead_time_weeks" placeholder="auto for electrical gear"></label>
             <label class="field">Buffer (days)<input type="number" name="buffer_days" value="7"></label>
             <label class="field">Schedule activity ID<input name="activity_id" placeholder="A1050"></label>
             <label class="field">…or need-on-site date<input type="date" name="need_by_date"></label>
@@ -218,6 +228,15 @@ async function schedule(el, params, { render }) {
     wire(body, '[data-eq] [data-k]', 'change', (_e, n) => guard(async () => {
       await api(`/api/equipment/${n.closest('[data-eq]').dataset.eq}`, { method: 'PATCH', body: { [n.dataset.k]: n.value || null } });
       render();
+    }));
+    const nameInput = body.querySelector('#add-eq [name=name]');
+    const leadInput = body.querySelector('#add-eq [name=lead_time_weeks]');
+    nameInput.addEventListener('change', () => guard(async () => {
+      const typical = await api(`/api/electrical/lead-time?name=${encodeURIComponent(nameInput.value)}`);
+      if (typical && !leadInput.value) {
+        leadInput.value = typical.weeks;
+        toast(`${typical.label}: typical lead ${typical.range} weeks — confirm with the vendor`);
+      }
     }));
     body.querySelector('#add-eq').addEventListener('submit', (e) => {
       e.preventDefault();
