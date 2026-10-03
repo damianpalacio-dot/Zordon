@@ -61,6 +61,8 @@ test('task health and money priority', () => {
   assert.equal(moneyPriority({ title: 'Price change order #4', priority: 'low', due_date: '2026-10-20' }, TODAY), 'high');
   assert.equal(moneyPriority({ title: 'Submit pay app', priority: 'medium', due_date: '2026-10-05' }, TODAY), 'critical');
   assert.equal(moneyPriority({ title: 'Clean site', priority: 'low' }, TODAY), 'low');
+  assert.equal(moneyPriority({ title: "Review Liz's WIP report", priority: 'medium' }, TODAY), 'high');
+  assert.equal(moneyPriority({ title: 'Update pending change orders list', priority: 'low', due_date: '2026-10-04' }, TODAY), 'critical');
 });
 
 test('dashboard puts cash flow first and counts delays', () => {
@@ -377,4 +379,27 @@ test('documents land in the folder that best describes them, including the team\
   const [filed] = await processInbox(db, root, TODAY);
   const doc = db.prepare('SELECT path FROM documents WHERE id = ?').get(filed.id);
   assert.match(doc.path, /^5\. PROJECTS\/G2707\/ERCCS\/G2707_BURB RPT - SUBMITTAL - /);
+});
+
+test('first start loads the real team and jobs from the OneDrive roster', async () => {
+  const { seedFromRoster } = await import('../server/index.js');
+  const { mkdir } = await import('node:fs/promises');
+  const root = await mkdtemp(join(tmpdir(), 'zordon-roster-'));
+  await mkdir(join(root, 'Zordon'), { recursive: true });
+  await writeFile(join(root, 'Zordon', 'zordon-roster.json'), JSON.stringify({
+    me: { email: 'Damian@gec2.com' },
+    people: [{ name: 'Vick Deguzman', role: 'Project Engineer', email: 'Vick@gec2.com' }, { name: 'Damian Palacio', role: 'Project Manager', email: 'damian@gec2.com' }],
+    projects: [{ name: 'LAUSD 32nd St', code: 'G3251', short_name: '32ND ST', folder: '5. PROJECTS/LAUSD 32ND ST' }, { name: 'Old job', code: 'G2245', status: 'closed' }, { name: 'Bad', folder: '../x' }],
+  }));
+  const db = openDb(':memory:');
+  assert.equal(await seedFromRoster(db, root), true);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM people').get().n, 2);
+  const me = JSON.parse(db.prepare("SELECT value FROM settings WHERE key = 'me_person_id'").get().value);
+  assert.equal(db.prepare('SELECT name FROM people WHERE id = ?').get(Number(me)).name, 'Damian Palacio');
+  assert.equal(db.prepare("SELECT folder FROM projects WHERE code = 'G3251'").get().folder, '5. PROJECTS/LAUSD 32ND ST');
+  assert.equal(db.prepare("SELECT status FROM projects WHERE code = 'G2245'").get().status, 'closed');
+  assert.equal(db.prepare("SELECT folder FROM projects WHERE name = 'Bad'").get().folder, null);
+  assert.ok(db.prepare("SELECT 1 FROM routines WHERE title LIKE '%WIP%' AND weekday = 4").get(), "Liz's WIP review is a standing Thursday reminder");
+  assert.equal(await seedFromRoster(db, root), false, 'never runs twice');
+  assert.equal(await seedFromRoster(openDb(':memory:'), await mkdtemp(join(tmpdir(), 'zordon-none-'))), false, 'no roster, no seed');
 });

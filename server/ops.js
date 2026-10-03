@@ -6,7 +6,7 @@ import { withSignOff, domainOf } from './quotes.js';
 export const DUE_SOON_DAYS = 2;
 
 // Change orders and billing are cash flow: they never sit at low priority.
-export const MONEY_RE = /\b(change orders?|c\.?o\.? ?#?\d+|pcos?|cors?|change requests?|cor #|pricing|price|pay ?apps?|pay(ment)? applications?|billing|bill|invoices?|g70[23]|retainage|lien waivers?|t&m|time and material)\b/i;
+export const MONEY_RE = /\b(change orders?|c\.?o\.? ?#?\d+|pcos?|cors?|change requests?|cor #|pricing|price|pay ?apps?|pay(ment)? applications?|billing|bill|invoices?|g70[23]|retainage|lien waivers?|t&m|time and material|wip|work in progress|job cost|pending change orders?|estimate change orders?)\b/i;
 export const isMoney = (t) => MONEY_RE.test(`${t.title || ''} ${t.description || ''}`);
 export const isElectricalCritical = (t) => ELECTRICAL_CRITICAL_RE.test(t.title || '');
 const RANK = { low: 0, medium: 1, high: 2, critical: 3 };

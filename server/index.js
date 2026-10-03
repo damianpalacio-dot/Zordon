@@ -224,13 +224,43 @@ export async function linkJobFolders(db, vaultRoot) {
   return linked;
 }
 
+// First start against a real OneDrive: load the team and jobs from Zordon/zordon-roster.json instead of demo data.
+export async function seedFromRoster(db, vaultRoot) {
+  if (db.prepare('SELECT COUNT(*) AS n FROM people').get().n > 0) return false;
+  let roster;
+  try { roster = JSON.parse((await readVaultFile(vaultRoot, `${CONTROL_DIR}/zordon-roster.json`)).toString('utf8')); } catch { return false; }
+  const people = Array.isArray(roster.people) ? roster.people.filter((p) => p?.name) : [];
+  if (!people.length) return false;
+  const colors = RANGER_COLORS;
+  const insertPerson = db.prepare('INSERT INTO people (name, role, trade, email, color) VALUES (?, ?, ?, ?, ?)');
+  const ids = people.map((p, i) => Number(insertPerson.run(String(p.name), p.role || 'Team', p.trade || null, p.email || null, colors[i % colors.length]).lastInsertRowid));
+  const me = roster.me?.email && people.findIndex((p) => String(p.email || '').toLowerCase() === roster.me.email.toLowerCase());
+  db.prepare("INSERT INTO settings (key, value) VALUES ('me_person_id', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(ids[me >= 0 ? me : 0]));
+  const insertProject = db.prepare('INSERT INTO projects (name, code, short_name, folder, location, status) VALUES (?, ?, ?, ?, ?, ?)');
+  for (const p of Array.isArray(roster.projects) ? roster.projects : []) {
+    if (!p?.name) continue;
+    insertProject.run(String(p.name), p.code || null, p.short_name || null, p.folder && !String(p.folder).includes('..') ? p.folder : null, p.location || null,
+      ['active', 'on_hold', 'closed'].includes(p.status) ? p.status : 'active');
+  }
+  // Standing reminders for the PM (weekday 0 = Sunday).
+  const meId = ids[me >= 0 ? me : 0];
+  const routine = db.prepare('INSERT INTO routines (title, description, owner_id, weekday, day_of_month, estimate_hours) VALUES (?, ?, ?, ?, ?, ?)');
+  routine.run("Review Liz's WIP report", 'Red: adjust budgets to cost. Blue: update end dates. Green: send billing paperwork to Honor. Yellow: billed 100% — close out?', meId, 4, null, 1);
+  routine.run("Update Liz's pending & estimate change orders", "Go through Liz's pending / estimate change order list and update every open COR so they can get done.", meId, 4, null, 1);
+  routine.run('Review 3-week look-ahead vs baseline schedule', 'Compare the look-ahead to the baseline, flag slipped activities, confirm crews and inspections, check equipment releases.', meId, 1, null, 1.5);
+  routine.run('Review equipment release log', 'Confirm release-by dates against the current schedule and chase open submittals blocking releases.', meId, 3, null, 0.5);
+  routine.run('Review change order log — push pending CORs to approval', 'Chase owner/GC approvals, price open PCOs, convert approved COs into billing.', meId, 5, null, 1);
+  routine.run('Submit monthly pay applications (billing)', 'Update SOVs and stored materials, collect lien waivers, submit pay apps for every active job.', meId, 1, 20, 3);
+  return true;
+}
+
 // Who and what Zordon knows, so the hourly email check can assign owners and projects by name.
 export async function writeRoster(db, vaultRoot) {
   const roster = {
     updated_at: new Date().toISOString(),
     me: db.prepare('SELECT name, email FROM people WHERE id = ?').get(mePersonId(db) ?? -1) || null,
     people: db.prepare('SELECT name, role, trade, email FROM people WHERE active = 1').all(),
-    projects: db.prepare("SELECT name, code, short_name, folder, location FROM projects WHERE status != 'closed'").all(),
+    projects: db.prepare('SELECT name, code, short_name, folder, location, status FROM projects').all(),
   };
   await saveFile(vaultRoot, `${CONTROL_DIR}/zordon-roster.json`, Buffer.from(JSON.stringify(roster, null, 2)), { overwrite: true });
 }
@@ -700,7 +730,9 @@ export function createApp(db, opts = {}) {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const db = openDb();
-  if (process.env.ZORDON_SEED !== 'off' && seedIfEmpty(db)) console.log('Seeded demo data (set ZORDON_SEED=off to skip).');
+  const vaultRootForSeed = process.env.ZORDON_VAULT || join(ROOT, 'files');
+  if (await seedFromRoster(db, vaultRootForSeed)) console.log('Loaded your team and jobs from Zordon/zordon-roster.json.');
+  else if (process.env.ZORDON_SEED !== 'off' && seedIfEmpty(db)) console.log('Seeded demo data (set ZORDON_SEED=off to skip).');
   const voice = createVoiceSession();
   const me = db.prepare('SELECT name FROM people WHERE id = ?').get(mePersonId(db) ?? -1);
   // Powering up: greet right away, and say goodbye when the server is shut down.
