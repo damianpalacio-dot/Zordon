@@ -53,29 +53,44 @@ Copy `.env.example` to `.env` and fill in what you use. Everything is optional.
 
 ---
 
-## File Vault and OneDrive
+## File Vault, OneDrive and the GEC2 filing rules
 
-Set `ZORDON_VAULT` to a folder inside your OneDrive, for example:
-
-```
-ZORDON_VAULT=C:\Users\Damian\OneDrive - Company\Zordon
-```
-
-Zordon creates the same folder tree for every project:
+Point Zordon at the **root of your GEC2 OneDrive** (the synced folder named like `OneDrive - <company>`):
 
 ```
-AGM-101-Angel-Grove-Medical-Office/
-  01-Contracts  02-Change-Orders  03-Billing  04-RFIs  05-Submittals  06-Drawings
-  07-Schedule  08-Meeting-Minutes  09-Daily-Reports  10-Inspections-Permits
-  11-Safety  12-Correspondence  13-Photos  99-General
-_Inbox/
+ZORDON_VAULT=C:\Users\Damian\OneDrive - <company>
 ```
 
-and names every file `2026-10-03_AGM-101_RFI_Beam-Penetration-At-C4.pdf`. Same convention, every time.
+Zordon files everything the GEC2 way, into the folders you already use:
 
-**The `_Inbox` habit:** whenever you save something (from Claude, an email attachment, a scan), save it into `_Inbox`. Zordon reads it, works out the project and document type, renames it and moves it into place. Renaming a project renames its folder and keeps every link working. The **Name helper** on the Vault page gives you the right name for files you keep elsewhere (Procore, SharePoint).
+```
+5. PROJECTS/<Job #>/          01 COST CONTROL  02 BIM  03 CONSTRUCTION SET  04 DESIGN CHANGES  05 SPECIFICATIONS
+                              06 SCHEDULE  07 RFIS  08 JOB SITE PHOTOS  09 PROCUREMENT LOG  10 CORRESPONDENCE
+                              11 CLOSEOUTS  12 TEMPLATES  13 SAFETY  14 SUBMITTALS  15 PREFAB
+Zordon/                       FILING.md, zordon-roster.json, skills/, jobs/, _Inbox/, _Unfiled/
+```
 
----
+File names: `<Job #>_<SHORT NAME> - <TYPE> [number] - <Description> (MM.DD.YYYY).ext`, e.g.
+`G2707_BURB RPT - COR 073 - Ice and Water Machine Power (10.03.2026).pdf`. Set each job's number (G####) and short
+name on the Projects page. Zordon only creates job start-up folders for real G#### jobs.
+
+**The `_Inbox` habit:** save anything into `OneDrive/Zordon/_Inbox` and Zordon names it and files it within a minute.
+The same folder carries the hourly email batches, Claude job results and habit proposals.
+
+## Claude Link (Cowork)
+
+Zordon hands skilled work to your Claude in Cowork through OneDrive:
+
+1. Upload `claude-skills/zordon-link` (zip the folder) once in claude.ai → Customize → Skills, and give Cowork access to your OneDrive folder.
+2. On any task, choose **🤖 Send to Claude**, pick a skill and list the input files. Zordon writes a job to `Zordon/jobs/`.
+3. In Cowork, say **"Run my Zordon jobs."** Claude follows the skill, saves the result in the right job folder with the right name, and reports back. The task shows the result, and can close itself.
+
+Starter skills (edit them on the Claude Link page, or add your own): panel schedules & directories (uses your
+`GEC2_PANEL_SCHEDULE.xlsm`), contract review (electrical sub), drawing overlay (revision compare), spec review (Div 26/27/28).
+
+**Learning your habits:** a weekly Claude check (Fridays) looks at how you actually named and filed things. Cowork
+watches too. When a new habit shows up 3+ times, they propose a rule or skill update; you approve or dismiss it on
+the Claude Link → Learning tab. Approved filing rules are added to `FILING.md` under "House rules learned".
 
 ## Email
 
