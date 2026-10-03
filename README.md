@@ -38,6 +38,18 @@ Open http://localhost:4000. The first run loads demo data so you can click aroun
 
 When Zordon starts, he says *"Good morning, Damian. Make today a day better than the last."* through your computer's speakers. He says *"May the Power protect you"* when you close the window or shut him down. Set `ZORDON_VOICE=off` to silence him.
 
+### Updating
+
+When Claude pushes changes, close Zordon and double-click `scripts/update-zordon.bat` (Mac: `update-zordon.command`),
+then start it again. Your data (`data/zordon.db`) and files are never touched by an update.
+
+### Adding your own logic
+
+- **Rules and skills, no code:** Zordon → Claude Link (edit or add skills, approve habit proposals), or edit
+  `OneDrive/Zordon/skills/<name>/SKILL.md` directly. These take effect immediately.
+- **New behavior or screens:** ask Claude in a Claude Code session on this repository, in plain English. It changes the
+  code, runs the tests and pushes; then run the update script.
+
 ### Settings
 
 Copy `.env.example` to `.env` and fill in what you use. Everything is optional.
