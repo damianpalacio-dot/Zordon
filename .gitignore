@@ -4,3 +4,5 @@ data/*.db-*
 .env
 files/
 dist/
+node/
+node-v*/
