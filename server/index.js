@@ -16,7 +16,7 @@ import { leadTime, createElectricalPlan, LEAD_TIMES } from './electrical.js';
 import { loadBuiltinSkills, listSkills, saveSkill, createJob, listJobs, syncControl, importJobResult, filingRules,
   importProposal, decideProposal, listProposals } from './claude.js';
 import { CATEGORY_NAMES, CATEGORY_FOLDERS, suggestName, finalize, textSnippet, uniquePath, saveFile, moveFile, deleteFile, vaultPath,
-  ensureProjectFolders, inboxFiles, readVaultFile, projectFolder, isJobNumber, JOB_TEMPLATE, CONTROL_DIR, INBOX } from './vault.js';
+  ensureProjectFolders, inboxFiles, readVaultFile, projectFolder, isJobNumber, JOB_TEMPLATE, CONTROL_DIR, INBOX, findJobFolder } from './vault.js';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const STATIC_DIRS = {
@@ -204,6 +204,20 @@ export function importEmailBatch(db, batch, today = isoDate()) {
   return result;
 }
 
+// Point each job at the folder it already has in OneDrive (job number, "G#### - Title", or a matching name).
+// Only fills in jobs without a folder; a folder set by hand is never replaced.
+export async function linkJobFolders(db, vaultRoot) {
+  const linked = [];
+  for (const p of db.prepare("SELECT * FROM projects WHERE folder IS NULL AND status != 'closed'").all()) {
+    const folder = await findJobFolder(vaultRoot, p);
+    if (folder && folder !== projectFolder(p)) {
+      db.prepare('UPDATE projects SET folder = ? WHERE id = ?').run(folder, p.id);
+      linked.push({ id: p.id, code: p.code, folder });
+    }
+  }
+  return linked;
+}
+
 // Who and what Zordon knows, so the hourly email check can assign owners and projects by name.
 export async function writeRoster(db, vaultRoot) {
   const roster = {
@@ -219,6 +233,8 @@ const categoryForPath = (path) => Object.entries(CATEGORY_FOLDERS).find(([, f]) 
 
 export async function processInbox(db, vaultRoot, today = isoDate()) {
   const filed = [];
+  let linked = false;
+  const link = async () => { if (!linked) { linked = true; await linkJobFolders(db, vaultRoot).catch(() => {}); } };
   for (const f of await inboxFiles(vaultRoot)) {
     try {
       if (/\.proposal\.zordon\.json$/i.test(f.name)) {
@@ -235,10 +251,12 @@ export async function processInbox(db, vaultRoot, today = isoDate()) {
       }
       if (/\.zordon\.json$/i.test(f.name)) {
         const result = importEmailBatch(db, JSON.parse((await readVaultFile(vaultRoot, f.rel)).toString('utf8')), today);
+        linked = false; // new jobs may have arrived
         await moveFile(vaultRoot, f.rel, `${f.rel.replace(/[^/]+$/, '')}.imported/${f.name}`);
         console.log(`[email] imported ${result.emails} email(s): ${result.tasks} task(s), ${result.meetings} meeting(s), ${result.duplicates} already seen`);
         continue;
       }
+      await link();
       filed.push(await fileDocument(db, vaultRoot, { fromRel: f.rel, filename: f.name }, today));
     } catch (err) {
       console.warn(`[vault] could not file ${f.name}: ${err.message}`);
@@ -294,6 +312,7 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
     ['POST', '/api/projects', async ({ body }) => {
       required(body.name, 'name');
       const id = db.prepare('INSERT INTO projects (name, code, short_name, location) VALUES (?, ?, ?, ?)').run(body.name, body.code || null, body.short_name || null, body.location || null).lastInsertRowid;
+      await linkJobFolders(db, vaultRoot).catch(() => {});
       const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
       // Real GEC2 jobs (G####) get the job start-up folders; other projects are left alone.
       if (isJobNumber(project.code)) await ensureProjectFolders(vaultRoot, project).catch((err) => console.warn(`[vault] ${err.message}`));
@@ -399,6 +418,7 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
     ['POST', '/api/documents/suggest', ({ body }) => suggestName(pick(body, ['filename', 'text', 'project_id', 'hint']), projectsCtx())],
     ['POST', '/api/documents', async ({ query, raw }) => {
       const filename = required(query.filename, 'filename');
+      await linkJobFolders(db, vaultRoot).catch(() => {});
       if (!raw?.length) throw new HttpError(400, 'File content is empty');
       const { id, analyzer } = await fileDocument(db, vaultRoot, { ...query, buffer: raw, filename }, today());
       return { ...getDoc(id), analyzer };
@@ -701,6 +721,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   // File anything saved into the vault's _Inbox folder every minute (documents, and hourly email batches).
   const vaultRoot = process.env.ZORDON_VAULT || join(ROOT, 'files');
   await loadBuiltinSkills(db);
+  for (const l of await linkJobFolders(db, vaultRoot).catch(() => [])) console.log(`[vault] ${l.code || l.id} → ${l.folder}`);
   await syncControl(db, vaultRoot).catch((err) => console.warn(`[claude] sync: ${err.message}`));
   const roster = () => writeRoster(db, vaultRoot).catch((err) => console.warn(`[vault] roster: ${err.message}`));
   roster();

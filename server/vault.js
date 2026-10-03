@@ -83,6 +83,42 @@ export function projectFolder(project) {
   return projectsDir() ? `${projectsDir()}/${job}` : job;
 }
 
+// ---------- Finding a job's existing folder ----------
+const STOP = new Set(['THE', 'OF', 'AND', 'A', 'AT', 'FOR', 'TO', 'IN', 'PROJECT', 'JOB', 'NEW']);
+const tokens = (t) => cleanName(t, 200).toUpperCase().replace(/[^A-Z0-9 ]+/g, ' ').split(/\s+/).filter((w) => w && !STOP.has(w));
+
+// Score how well a folder name fits a job: number first, then the job's name.
+export function folderScore(folderName, project) {
+  const code = String(project.code || '').toUpperCase().trim();
+  const f = cleanName(folderName, 200).toUpperCase();
+  if (code && f === code) return 100;
+  if (code && f.startsWith(code) && /^[\s\-_.]/.test(f.slice(code.length) || ' ')) return 90; // "G2379 - LGB ATCT"
+  if (code && tokens(f).includes(code)) return 80;
+  if (/^G\d{4}\b/.test(f)) return 0; // another job's number
+  const ft = tokens(f);
+  const pt = new Set([...tokens(project.name), ...tokens(project.short_name)]);
+  if (!ft.length || !pt.size) return 0;
+  const shared = ft.filter((w) => pt.has(w)).length;
+  const ratio = shared / ft.length;
+  // "LAUSD 32ND ST" fits "LAUSD 32nd St / USC Magnet": most of the folder's words belong to the job.
+  return shared >= 2 && ratio >= 0.6 ? Math.round(50 + ratio * 20) : 0;
+}
+
+// Pick the best existing folder for a job: inside the projects folder first, then the OneDrive root.
+export async function findJobFolder(root, project) {
+  const places = [projectsDir(), ''].filter((p, i, a) => a.indexOf(p) === i);
+  let best = null;
+  for (const [rank, place] of places.entries()) {
+    const entries = await readdir(vaultPath(root, place || '.'), { withFileTypes: true }).catch(() => []);
+    for (const e of entries) {
+      if (!e.isDirectory() || e.name.startsWith('.') || e.name === CONTROL_DIR) continue;
+      const score = folderScore(e.name, project) - rank; // prefer the projects folder on ties
+      if (score > 0 && (!best || score > best.score)) best = { score, path: place ? `${place}/${e.name}` : e.name };
+    }
+  }
+  return best?.path || null;
+}
+
 export const usDate = (iso) => { const [y, m, d] = iso.split('-'); return `${m}.${d}.${y}`; };
 
 export function textSnippet(buffer, filename) {

@@ -321,3 +321,31 @@ test('team-only emails end with a Zordon quote; outside emails stay plain', asyn
   assert.match(drafts.find((d) => d.name === 'Marcus Hill').body, /— Zordon$/);
   assert.doesNotMatch(drafts.find((d) => d.name === 'Tina Nguyen').body, /Zordon/);
 });
+
+test('jobs find their existing OneDrive folder by number, "number - title", or name', async () => {
+  const { folderScore, findJobFolder } = await import('../server/vault.js');
+  const { linkJobFolders } = await import('../server/index.js');
+  const { mkdir } = await import('node:fs/promises');
+  const root = await mkdtemp(join(tmpdir(), 'zordon-jobs-'));
+  // Mirrors Damian's OneDrive.
+  for (const d of ['5. PROJECTS/G2707', '5. PROJECTS/BUR Siemens Pathways', '5. PROJECTS/(E) BURB SWA TEMP POWER', '5. PROJECTS/LAUSD 32ND ST',
+    '5. PROJECTS/FAIRFAX SLD', '5. PROJECTS/G3052', '5. PROJECTS/G2853', 'G2379 - LGB ATCT', 'G2853 - CHES HVAC UPGRADES']) {
+    await mkdir(join(root, d), { recursive: true });
+  }
+  const bur = { code: 'G2707', name: 'Burbank Airport Replacement Passenger Terminal (SWA)', short_name: 'BURB RPT' };
+  assert.equal(await findJobFolder(root, bur), '5. PROJECTS/G2707');
+  assert.equal(await findJobFolder(root, { code: 'G3251', name: 'LAUSD 32nd St / USC Magnet', short_name: '32ND ST' }), '5. PROJECTS/LAUSD 32ND ST');
+  assert.equal(await findJobFolder(root, { code: 'G3052', name: 'Fairfax High School Modernization' }), '5. PROJECTS/G3052', 'job number beats a similar name');
+  assert.equal(await findJobFolder(root, { code: 'G2379', name: 'Long Beach ATCT' }), 'G2379 - LGB ATCT');
+  assert.equal(await findJobFolder(root, { code: 'G2853', name: 'CHES HVAC Upgrades' }), '5. PROJECTS/G2853', 'the projects folder wins over the root');
+  assert.equal(await findJobFolder(root, { code: 'G9999', name: 'Brand New Job' }), null);
+  assert.equal(folderScore('G2489 - CHES IN _ CR', { code: 'G2707', name: 'CHES IN CR' }), 0, "never take another job's numbered folder");
+  assert.equal(folderScore('ST', { code: 'X', name: 'LAUSD 32nd St' }), 0, 'one shared word is not enough');
+
+  const db = freshDb();
+  db.prepare("INSERT INTO projects (name, code, short_name) VALUES ('LAUSD 32nd St / USC Magnet', 'G3251', '32ND ST'), ('Long Beach ATCT', 'G2379', 'LGB ATCT')").run();
+  db.prepare("INSERT INTO projects (name, code, folder) VALUES ('Hand set', 'G2707', 'Somewhere/Else')").run();
+  const linked = await linkJobFolders(db, root);
+  assert.deepEqual(linked.map((l) => l.folder).sort(), ['5. PROJECTS/LAUSD 32ND ST', 'G2379 - LGB ATCT']);
+  assert.equal(db.prepare("SELECT folder FROM projects WHERE name = 'Hand set'").get().folder, 'Somewhere/Else', 'a folder set by hand is kept');
+});

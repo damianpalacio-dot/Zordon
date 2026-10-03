@@ -50,7 +50,14 @@ export function filingRules(db) {
     .map(([c, f]) => `| ${c} | ${f} |`).join('\n');
   return `# GEC2 filing rules (Zordon)
 
-Every project lives in \`5. PROJECTS/<Job #>/\` (for example \`5. PROJECTS/G2707\`) with the GEC2 job start-up folders:
+Every project lives in \`5. PROJECTS/<Job #>/\` (for example \`5. PROJECTS/G2707\`) with the GEC2 job start-up folders.
+
+**Finding a job's folder** (in \`5. PROJECTS\`, then the OneDrive root): 1) a folder named exactly by the job number
+(\`G2707\`); 2) a folder that starts with the job number and a title (\`G2379 - LGB ATCT\`); 3) a folder whose name matches
+the job's name (\`LAUSD 32ND ST\` for 32nd St). Use that folder. Create \`5. PROJECTS/<Job #>\` only when nothing matches.
+The roster's \`folder\` field records the match for each job.
+
+Start-up folders:
 
 ${JOB_TEMPLATE.map((f) => `- \`${f}\``).join('\n')}
 
