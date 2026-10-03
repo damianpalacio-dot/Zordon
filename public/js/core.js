@@ -80,11 +80,21 @@ export async function refreshRefs() {
   const banner = document.getElementById('demo-banner');
   if (banner) {
     banner.hidden = !meta.demo;
-    banner.textContent = !meta.vault_set
-      ? 'DEMO DATA: Zordon could not find your GEC2 OneDrive. Make sure OneDrive is signed in and synced, then restart Zordon.'
-      : meta.roster_error === 'not found'
-        ? `DEMO DATA: Zordon is looking in "${meta.vault}" but there is no Zordon\\zordon-roster.json there. Set ZORDON_VAULT in .env to the folder that holds "5. PROJECTS" and "Zordon", then restart.`
-        : `DEMO DATA: found your OneDrive (${meta.vault}) — waiting for OneDrive to download Zordon\\zordon-roster.json. In File Explorer, right-click the Zordon folder → "Always keep on this device". Zordon switches to your jobs within a minute.`;
+    const why = !meta.vault_set ? 'Zordon could not find your GEC2 OneDrive.'
+      : meta.roster_error === 'not found' ? `No Zordon\\zordon-roster.json in "${meta.vault}".`
+        : `Waiting for OneDrive to download Zordon\\zordon-roster.json from "${meta.vault}".`;
+    banner.innerHTML = `<b>DEMO DATA.</b> ${esc(why)} <button class="btn primary" id="load-roster">Load my jobs</button>
+      <span class="small">Pick <span class="mono">zordon-roster.json</span> in your GEC2 OneDrive → Zordon folder.</span>
+      <input type="file" id="roster-file" accept=".json,application/json" hidden>`;
+    const input = banner.querySelector('#roster-file');
+    banner.querySelector('#load-roster').onclick = () => input.click();
+    input.onchange = () => guard(async () => {
+      const roster = JSON.parse(await input.files[0].text());
+      const res = await api('/api/roster/import', { method: 'POST', body: roster });
+      toast(`Loaded ${res.projects} jobs and ${res.people} people`);
+      location.hash = '#/projects';
+      location.reload();
+    });
   }
   return store;
 }

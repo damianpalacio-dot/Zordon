@@ -265,7 +265,14 @@ export async function seedFromRoster(db, vaultRoot) {
     rosterStatus.error = err.code === 'ENOENT' ? 'not found' : `could not read it yet (${err.code || err.message})`;
     return false;
   }
-  const people = Array.isArray(roster.people) ? roster.people.filter((p) => p?.name) : [];
+  return loadRoster(db, roster);
+}
+
+// Put a roster's team, jobs and standing reminders in. Replaces demo data; never touches real data.
+export function loadRoster(db, roster) {
+  const isDemo = db.prepare("SELECT value FROM settings WHERE key = 'demo_data'").get()?.value === 'true';
+  if (!isDemo && db.prepare('SELECT COUNT(*) AS n FROM people').get().n > 0) return false;
+  const people = Array.isArray(roster?.people) ? roster.people.filter((p) => p?.name) : [];
   if (!people.length) return false;
   if (isDemo) clearDemo(db);
   const colors = RANGER_COLORS;
@@ -579,6 +586,14 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
       await deleteFile(vaultRoot, d.path);
       db.prepare('DELETE FROM documents WHERE id = ?').run(d.id);
       return { deleted: true };
+    }],
+
+    // Load the team and jobs from a zordon-roster.json the user picks (when OneDrive can't be read directly).
+    ['POST', '/api/roster/import', ({ body }) => {
+      if (!Array.isArray(body?.people) || !body.people.length) throw new HttpError(400, 'That file is not a Zordon roster (no people in it)');
+      if (!loadRoster(db, body)) throw new HttpError(409, 'Zordon already has your real data. Use scripts/reset-zordon.bat to start over.');
+      writeRoster(db, vaultRoot).catch(() => {});
+      return { people: db.prepare('SELECT COUNT(*) AS n FROM people').get().n, projects: db.prepare('SELECT COUNT(*) AS n FROM projects').get().n };
     }],
 
     // ----- Change order & submittal packages -----

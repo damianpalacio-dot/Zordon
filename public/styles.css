@@ -369,4 +369,7 @@ pre.reminder { white-space: pre-wrap; background: #08101b; border: 1px solid var
 }
 
 .pkg-stages { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 10px; }
-.demo-banner { margin: 12px 24px 0; padding: 8px 14px; border: 1px solid var(--amber, #f5b942); border-radius: 6px; color: var(--amber, #f5b942); font-size: 13px; background: rgba(245, 185, 66, .08); }
+.demo-banner { position: fixed; top: 12px; left: 244px; right: 24px; z-index: 60; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 8px 14px; border: 1px solid var(--amber, #f5b942); border-radius: 6px; color: var(--amber, #f5b942); font-size: 13px; background: #241c0b; box-shadow: 0 6px 24px rgba(0,0,0,.5); }
+.demo-banner[hidden] { display: none; }
+@media (max-width: 900px) { .demo-banner { left: 16px; right: 16px; } }
+body:has(#demo-banner:not([hidden])) #view { padding-top: 76px; }
