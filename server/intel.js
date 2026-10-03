@@ -59,7 +59,7 @@ export function parseTime(text) {
   return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
 }
 
-function matchPerson(text, people) {
+export function matchPerson(text, people) {
   const t = text.toLowerCase();
   return people.find((p) => {
     const [first, ...rest] = p.name.toLowerCase().split(/\s+/);
@@ -67,9 +67,22 @@ function matchPerson(text, people) {
   }) || null;
 }
 
-function matchProject(text, projects) {
+export function matchProject(text, projects) {
   const t = text.toLowerCase();
   return projects.find((p) => (p.code && t.includes(p.code.toLowerCase())) || t.includes(p.name.toLowerCase())) || null;
+}
+
+// Items from outside Zordon (the hourly email check) name people and projects instead of ids.
+export function resolveRefs(item, people, projects) {
+  const out = { ...item };
+  if (out.owner_id == null && out.owner) {
+    const o = String(out.owner).toLowerCase();
+    out.owner_id = (people.find((p) => p.email && p.email.toLowerCase() === o) || matchPerson(o, people))?.id ?? null;
+  }
+  if (out.project_id == null && out.project) out.project_id = matchProject(String(out.project), projects)?.id ?? null;
+  delete out.owner;
+  delete out.project;
+  return out;
 }
 
 function cleanTitle(sentence) {

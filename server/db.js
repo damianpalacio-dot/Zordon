@@ -182,6 +182,7 @@ const ADDED_COLUMNS = {
   projects: { lat: 'REAL', lon: 'REAL' },
   tasks: { estimate_hours: 'REAL' },
   routines: { day_of_month: 'INTEGER' },
+  emails: { message_id: 'TEXT' },
 };
 
 function migrate(db) {
@@ -189,6 +190,8 @@ function migrate(db) {
     const have = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name));
     for (const [col, type] of Object.entries(cols)) if (!have.has(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`);
   }
+  // The hourly email check may see the same message twice; the message id keeps it to one import.
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_message_id ON emails(message_id) WHERE message_id IS NOT NULL');
 }
 
 // Local calendar date as YYYY-MM-DD (job sites run on local time, not UTC).
@@ -206,7 +209,7 @@ export function seedIfEmpty(db, today = isoDate()) {
   if (db.prepare('SELECT COUNT(*) AS n FROM people').get().n > 0) return false;
 
   const person = db.prepare('INSERT INTO people (name, role, trade, email, color) VALUES (?, ?, ?, ?, ?)');
-  const pm = person.run('Damian Palacio', 'Project Manager', null, 'damian.palacio@gmail.com', 'white').lastInsertRowid;
+  const pm = person.run('Damian Palacio', 'Project Manager', null, 'Damian@gec2.com', 'white').lastInsertRowid;
   const apm = person.run('Jordan Lee', 'APM', null, 'jordan.lee@example.com', 'red').lastInsertRowid;
   const pe = person.run('Sam Ortiz', 'Project Engineer', null, 'sam.ortiz@example.com', 'blue').lastInsertRowid;
   const f1 = person.run('Marcus Hill', 'Foreman', 'Concrete', 'marcus.hill@example.com', 'black').lastInsertRowid;

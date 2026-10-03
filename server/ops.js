@@ -1,6 +1,7 @@
 // Command-center logic: task health, dashboard, briefings and reminder drafts.
 import { addDays, isoDate } from './db.js';
 import { ELECTRICAL_CRITICAL_RE } from './electrical.js';
+import { withSignOff, domainOf } from './quotes.js';
 
 export const DUE_SOON_DAYS = 2;
 
@@ -166,7 +167,13 @@ export function reminderDrafts(db, today = isoDate(), { fromName } = {}) {
   const people = db.prepare('SELECT * FROM people WHERE active = 1').all();
   const lastSent = new Map(db.prepare('SELECT person_id, MAX(created_at) AS at FROM reminders GROUP BY person_id').all()
     .map((r) => [r.person_id, r.at]));
-  const sender = fromName || people.find((p) => /project manager/i.test(p.role))?.name || 'Project Manager';
+  const pm = people.find((p) => /project manager/i.test(p.role));
+  const sender = fromName || pm?.name || 'Project Manager';
+  // Emails that stay inside the team (same domain as the PM, e.g. gec2.com) get a Zordon sign-off.
+  const meRow = db.prepare("SELECT value FROM settings WHERE key = 'me_person_id'").get();
+  const me = (meRow && people.find((p) => p.id === Number(JSON.parse(meRow.value)))) || pm;
+  const teamRow = db.prepare("SELECT value FROM settings WHERE key = 'team_domain'").get();
+  const teamDomain = teamRow ? JSON.parse(teamRow.value) : domainOf(me?.email);
 
   return people.flatMap((p) => {
     const theirs = tasks.filter((t) => t.owner_id === p.id);
@@ -193,7 +200,7 @@ export function reminderDrafts(db, today = isoDate(), { fromName } = {}) {
       due_soon: soon.length,
       last_sent_at: lastSent.get(p.id) || null,
       subject,
-      body: parts.join('\n'),
+      body: withSignOff(parts.join('\n'), [p.email], teamDomain, today, p.id),
     }];
   });
 }

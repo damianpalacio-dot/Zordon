@@ -147,10 +147,10 @@ export async function uniquePath(root, folder, filename, exists) {
   }
 }
 
-export async function saveFile(root, rel, buffer) {
+export async function saveFile(root, rel, buffer, { overwrite = false } = {}) {
   const full = vaultPath(root, rel);
   await mkdir(dirname(full), { recursive: true });
-  await writeFile(full, buffer, { flag: 'wx' });
+  await writeFile(full, buffer, { flag: overwrite ? 'w' : 'wx' });
 }
 
 export async function moveFile(root, fromRel, toRel) {

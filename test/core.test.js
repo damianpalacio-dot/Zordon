@@ -232,3 +232,80 @@ test('electrical: lead times, critical-path priority and the energization plan',
   const utility = db.prepare("SELECT * FROM tasks WHERE title LIKE 'Submit utility service%'").get();
   assert.equal(utility.due_date, '2026-05-05'); // 300 days earlier: already behind, and it shows
 });
+
+test('hourly email batches import once, assign by name and land on the board', async () => {
+  const { importEmailBatch } = await import('../server/index.js');
+  const db = freshDb();
+  const batch = {
+    type: 'zordon.emails',
+    auto_accept: true,
+    emails: [{
+      message_id: 'AAMk-1',
+      sender: 'gc@builder.com',
+      subject: 'L2 pour and CO #5',
+      received_at: '2026-10-03T15:02:00Z',
+      body: 'Marcus please confirm the pump. Jordan, price CO #5 by Tuesday.',
+      tasks: [
+        { title: 'Confirm pump truck for L2 pour', owner: 'Marcus Hill', project: 'AGM-101', due_date: '2026-10-05', priority: 'high' },
+        { title: 'Price change order #5', owner: 'jordan.lee@example.com', project: 'Command Center Retrofit', due_date: '2026-10-06', priority: 'low' },
+        { title: 'Reply to GC about delivery', owner: 'Nobody Known', due_date: 'next week' },
+      ],
+      meetings: [{ title: 'Pour walk', starts_at: '2026-10-05T07:00', project: 'AGM-101' }],
+    }],
+  };
+  const r = importEmailBatch(db, batch, TODAY);
+  assert.deepEqual([r.emails, r.tasks, r.meetings, r.duplicates], [1, 3, 1, 0]);
+  const pump = db.prepare("SELECT * FROM tasks WHERE title LIKE 'Confirm pump%'").get();
+  assert.equal(pump.owner_id, db.prepare("SELECT id FROM people WHERE name = 'Marcus Hill'").get().id);
+  assert.equal(pump.project_id, 1);
+  assert.equal(pump.source, 'email');
+  const co = db.prepare("SELECT * FROM tasks WHERE title LIKE 'Price change order%'").get();
+  assert.equal(co.owner_id, db.prepare("SELECT id FROM people WHERE name = 'Jordan Lee'").get().id);
+  assert.ok(['high', 'critical'].includes(co.priority), 'change orders never sit low');
+  const reply = db.prepare("SELECT * FROM tasks WHERE title LIKE 'Reply to GC%'").get();
+  assert.equal(reply.owner_id, null);
+  assert.equal(reply.due_date, null, 'unparseable dates are dropped, not guessed');
+  assert.equal(importEmailBatch(db, batch, TODAY).duplicates, 1, 'the next hourly check does not duplicate it');
+  assert.throws(() => importEmailBatch(db, { emails: [] }, TODAY));
+
+  const r2 = importEmailBatch(db, {
+    type: 'zordon.emails',
+    projects: [{ name: 'Fairfax HS Modernization', code: 'FAIRFAX' }, { name: 'Angel Grove Medical Office', code: 'AGM-101' }],
+    emails: [{ message_id: 'AAMk-2', subject: 'DP-3 gear', tasks: [{ title: 'Track Eaton DP-3 responses', project: 'FAIRFAX' }] }],
+  }, TODAY);
+  assert.equal(r2.new_projects, 1, 'only the unknown job is created');
+  const eaton = db.prepare("SELECT t.*, p.code FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.title LIKE 'Track Eaton%'").get();
+  assert.equal(eaton.code, 'FAIRFAX');
+});
+
+test('email batch files dropped in _Inbox are imported, not filed as documents', async () => {
+  const db = freshDb();
+  const root = await mkdtemp(join(tmpdir(), 'zordon-batch-'));
+  const { mkdir } = await import('node:fs/promises');
+  await mkdir(join(root, '_Inbox'));
+  const file = join(root, '_Inbox', 'emails-2026-10-03T1500.zordon.json');
+  await writeFile(file, JSON.stringify({ type: 'zordon.emails', emails: [{ message_id: 'x1', subject: 'Hi', tasks: [{ title: 'Send panel schedule' }] }] }));
+  const old = new Date(Date.now() - 60_000);
+  await utimes(file, old, old);
+  assert.deepEqual(await processInbox(db, root, TODAY), []);
+  assert.ok(db.prepare("SELECT id FROM tasks WHERE title = 'Send panel schedule'").get());
+  assert.deepEqual(await readdir(join(root, '_Inbox')), ['.imported']);
+});
+
+test('team-only emails end with a Zordon quote; outside emails stay plain', async () => {
+  const { isTeamOnly, withSignOff, zordonQuote, QUOTES } = await import('../server/quotes.js');
+  assert.ok(isTeamOnly(['Vick@gec2.com', 'chase@GEC2.com'], 'gec2.com'));
+  assert.ok(!isTeamOnly(['Vick@gec2.com', 'dmartinez@pankow.com'], 'gec2.com'));
+  assert.ok(!isTeamOnly([], 'gec2.com'));
+  assert.match(withSignOff('Hi', ['vick@gec2.com'], 'gec2.com', TODAY, 1), /\n\n".+"\n— Zordon$/);
+  assert.equal(withSignOff('Hi', ['gc@pankow.com'], 'gec2.com', TODAY, 1), 'Hi');
+  const all = [...QUOTES.fun, ...QUOTES.serious];
+  const seen = new Set(Array.from({ length: 10 }, (_, i) => zordonQuote(addDays(TODAY, i))));
+  assert.ok([...seen].every((q) => all.includes(q)) && seen.size > 3, 'rotates through fun and serious lines');
+
+  const db = freshDb(); // PM is Damian@gec2.com; demo foremen are @example.com
+  db.prepare("UPDATE people SET email = 'marcus@gec2.com' WHERE name = 'Marcus Hill'").run();
+  const drafts = reminderDrafts(db, TODAY);
+  assert.match(drafts.find((d) => d.name === 'Marcus Hill').body, /— Zordon$/);
+  assert.doesNotMatch(drafts.find((d) => d.name === 'Tina Nguyen').body, /Zordon/);
+});

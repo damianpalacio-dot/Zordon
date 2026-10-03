@@ -5,7 +5,7 @@ import { extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { timingSafeEqual } from 'node:crypto';
 import { openDb, seedIfEmpty, isoDate, STATUSES, PRIORITIES, RANGER_COLORS } from './db.js';
-import { analyzeEmail, aiEnabled } from './intel.js';
+import { analyzeEmail, aiEnabled, resolveRefs } from './intel.js';
 import { moneyPriority, dashboard, listTasks, getTask, listMeetings, projectSummaries, reminderDrafts, realityCheck, myNudges } from './ops.js';
 import { WATCH_GROUPS, parseNotificationEmail, upsertItems, listItems, docControlSummary, getSetting, setSetting, mePersonId } from './doccontrol.js';
 import { importSchedule, lookahead, equipmentLog, runRoutines } from './schedule.js';
@@ -19,11 +19,12 @@ import { CATEGORY_NAMES, CATEGORY_FOLDERS, suggestName, finalize, textSnippet, u
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const STATIC_DIRS = {
   '/vendor/three/': join(ROOT, 'node_modules/three/'),
+  '/vendor/fonts/': join(ROOT, 'node_modules/@fontsource/'),
   '/': join(ROOT, 'public/'),
 };
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon',
+  '.json': 'application/json', '.woff2': 'font/woff2', '.woff': 'font/woff', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon',
 };
 
 export class HttpError extends Error {
@@ -156,10 +157,71 @@ export async function fileDocument(db, vaultRoot, { buffer, fromRel, filename, p
   return { id: Number(id), analyzer: suggestion.analyzer };
 }
 
+// A batch of already-analyzed emails, written to the vault's _Inbox by the hourly Claude email check.
+// { "type": "zordon.emails", "auto_accept": true, "projects": [{ name, code, location }], "emails": [{ message_id, sender, subject, received_at, summary, body,
+//   tasks: [{ title, owner, project, due_date, priority }], meetings: [{ title, starts_at, location, project }] }] }
+export function importEmailBatch(db, batch, today = isoDate()) {
+  if (batch?.type !== 'zordon.emails' || !Array.isArray(batch.emails)) throw new Error('Not a zordon.emails batch');
+  const result = { emails: 0, duplicates: 0, tasks: 0, meetings: 0, doc_items: 0, new_projects: 0 };
+  // Jobs seen in email that Zordon doesn't know yet: { name, code, location }.
+  for (const p of Array.isArray(batch.projects) ? batch.projects : []) {
+    if (!p?.name) continue;
+    const exists = db.prepare('SELECT id FROM projects WHERE (code IS NOT NULL AND lower(code) = lower(?)) OR lower(name) = lower(?)').get(p.code || '', p.name);
+    if (!exists) {
+      db.prepare('INSERT INTO projects (name, code, location) VALUES (?, ?, ?)').run(String(p.name), p.code || null, p.location || null);
+      result.new_projects++;
+    }
+  }
+  const people = db.prepare('SELECT id, name, email FROM people WHERE active = 1').all();
+  const projects = db.prepare('SELECT id, name, code FROM projects').all();
+  const seen = db.prepare('SELECT id FROM emails WHERE message_id = ?');
+  for (const e of batch.emails) {
+    if (e.message_id && seen.get(String(e.message_id))) { result.duplicates++; continue; }
+    const tasks = (e.tasks || []).filter((t) => t?.title).map((t) => resolveRefs(t, people, projects));
+    const meetings = (e.meetings || []).filter((m) => m?.title && m?.starts_at).map((m) => resolveRefs(m, people, projects));
+    for (const t of tasks) {
+      if (!PRIORITIES.includes(t.priority)) t.priority = 'medium';
+      if (t.due_date && !/^\d{4}-\d{2}-\d{2}$/.test(t.due_date)) t.due_date = null;
+    }
+    const analysis = { summary: e.summary || '', urgency: e.urgency || 'normal', tasks, meetings: meetings.filter((m) => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(m.starts_at)) };
+    const id = Number(db.prepare(`INSERT INTO emails (sender, subject, body, received_at, analysis, analyzer, message_id)
+      VALUES (?, ?, ?, ?, ?, 'claude-hourly', ?)`).run(e.sender || null, e.subject || null, e.body || e.summary || '', e.received_at || new Date().toISOString(),
+      JSON.stringify(analysis), e.message_id ? String(e.message_id) : null).lastInsertRowid);
+    result.emails++;
+    const items = parseNotificationEmail({ sender: e.sender || '', subject: e.subject || '', body: e.body || '' }, today);
+    if (items.length) { upsertItems(db, items, today); result.doc_items += items.length; }
+    if (batch.auto_accept !== false && (analysis.tasks.length || analysis.meetings.length)) {
+      const created = acceptEmail(db, id, analysis);
+      result.tasks += created.tasks.length;
+      result.meetings += created.meetings.length;
+    } else if (!analysis.tasks.length && !analysis.meetings.length) {
+      db.prepare("UPDATE emails SET status = 'processed' WHERE id = ?").run(id);
+    }
+  }
+  return result;
+}
+
+// Who and what Zordon knows, so the hourly email check can assign owners and projects by name.
+export async function writeRoster(db, vaultRoot) {
+  const roster = {
+    updated_at: new Date().toISOString(),
+    me: db.prepare('SELECT name, email FROM people WHERE id = ?').get(mePersonId(db) ?? -1) || null,
+    people: db.prepare('SELECT name, role, trade, email FROM people WHERE active = 1').all(),
+    projects: db.prepare("SELECT name, code, location FROM projects WHERE status != 'closed'").all(),
+  };
+  await saveFile(vaultRoot, 'zordon-roster.json', Buffer.from(JSON.stringify(roster, null, 2)), { overwrite: true });
+}
+
 export async function processInbox(db, vaultRoot, today = isoDate()) {
   const filed = [];
   for (const f of await inboxFiles(vaultRoot)) {
     try {
+      if (/\.zordon\.json$/i.test(f.name)) {
+        const result = importEmailBatch(db, JSON.parse((await readVaultFile(vaultRoot, f.rel)).toString('utf8')), today);
+        await moveFile(vaultRoot, f.rel, `${f.rel.replace(/[^/]+$/, '')}.imported/${f.name}`);
+        console.log(`[email] imported ${result.emails} email(s): ${result.tasks} task(s), ${result.meetings} meeting(s), ${result.duplicates} already seen`);
+        continue;
+      }
       filed.push(await fileDocument(db, vaultRoot, { fromRel: f.rel, filename: f.name }, today));
     } catch (err) {
       console.warn(`[vault] could not file ${f.name}: ${err.message}`);
@@ -384,7 +446,7 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
       all_groups: WATCH_GROUPS.map(({ key, label }) => ({ key, label })),
     })],
     ['PATCH', '/api/settings', ({ body }) => {
-      for (const k of ['me_person_id', 'capacity_hours_per_day', 'watch_groups']) if (k in body) setSetting(db, k, body[k]);
+      for (const k of ['me_person_id', 'capacity_hours_per_day', 'watch_groups', 'team_domain']) if (k in body) setSetting(db, k, body[k]);
       return { ok: true };
     }],
 
@@ -580,8 +642,11 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   };
   cycle();
   setInterval(cycle, Number(process.env.ZORDON_SYNC_MINUTES || 30) * 60_000).unref();
-  // File anything saved into the vault's _Inbox folder every minute.
+  // File anything saved into the vault's _Inbox folder every minute (documents, and hourly email batches).
   const vaultRoot = process.env.ZORDON_VAULT || join(ROOT, 'files');
+  const roster = () => writeRoster(db, vaultRoot).catch((err) => console.warn(`[vault] roster: ${err.message}`));
+  roster();
+  setInterval(roster, 15 * 60_000).unref();
   for (const p of db.prepare("SELECT * FROM projects WHERE status != 'closed'").all()) await ensureProjectFolders(vaultRoot, p).catch(() => {});
   setInterval(() => processInbox(db, vaultRoot).then((f) => f.length && console.log(`[vault] filed ${f.length} file(s) from _Inbox`)), 60_000).unref();
   createServer(createApp(db, { voice })).listen(port, () => {

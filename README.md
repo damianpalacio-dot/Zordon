@@ -79,7 +79,9 @@ and names every file `2026-10-03_AGM-101_RFI_Beam-Penetration-At-C4.pdf`. Same c
 
 ## Email
 
-Three ways to get email in, simplest first:
+**Hourly check (set up):** a scheduled Claude routine reads your Outlook every hour on workdays (5am–8pm Pacific), pulls out tasks, meetings, RFIs and submittals, and writes them to `OneDrive/Zordon/_Inbox` as a `.zordon.json` file. Zordon imports it within a minute and puts the tasks on the board (duplicates are skipped), creating projects it hasn't seen yet. Set `ZORDON_VAULT` to your synced `OneDrive - GEC2/Zordon` folder so Zordon sees those files.
+
+Other ways to get email in:
 
 1. **Paste** into Email Intel and review the suggestions.
 2. **Ask Claude to sweep your inbox.** The `inbox-sweep` skill in `.claude/skills/` reads Outlook with the Microsoft 365 connector and posts each email to Zordon. It can run as a scheduled Claude routine every morning.
@@ -117,6 +119,7 @@ No API access? Notification emails alone keep the RFI/submittal list current, an
 
 - **Your nudges** run on a 3-day / 1-day / day-of cadence. Change orders and billing get a 💲 and the loudest wording.
 - **Team reminders** are drafted for anyone with late or soon-due work. You review, then send from your own email (one click) or copy to Teams.
+- **Zordon sign-off**: reminders that go only to your own team (same email domain as you, e.g. `@gec2.com`) end with a Zordon line, alternating fun and serious ("A Ranger never leaves a T&M ticket unsigned." / "Safety first. Nobody gets hurt on our watch."). Anything that goes outside the company stays plain.
 - **Recurring reminders** (Schedule → Recurring reminders) drop a task a few days before each occurrence: the weekly look-ahead vs baseline review, the monthly pay application, the weekly change order log.
 - **Automatic sending:** ask Claude to set up a routine that reads Zordon's reminder drafts (`GET /api/reminders/drafts`) and sends them from your Outlook on a schedule.
 
