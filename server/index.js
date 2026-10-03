@@ -884,10 +884,17 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   // File anything saved into the vault's _Inbox folder every minute (documents, and hourly email batches).
   const vaultRoot = process.env.ZORDON_VAULT || join(ROOT, 'files');
   await loadBuiltinSkills(db);
-  for (const l of await linkJobFolders(db, vaultRoot).catch(() => [])) console.log(`[vault] ${l.code || l.id} → ${l.folder}`);
-  await syncControl(db, vaultRoot).catch((err) => console.warn(`[claude] sync: ${err.message}`));
+  // Open the doors first; scanning OneDrive can take a while and the window shouldn't wait on it.
+  createServer(createApp(db, { voice })).listen(port, () => {
+    console.log(`\n  ⚡ Zordon Command Center online → http://localhost:${port}`);
+    console.log(`  Email intelligence: ${aiEnabled() ? 'Claude' : 'rule-based (set ANTHROPIC_API_KEY to enable Claude)'}\n`);
+  });
   const roster = () => writeRoster(db, vaultRoot).catch((err) => console.warn(`[vault] roster: ${err.message}`));
-  roster();
+  (async () => {
+    for (const l of await linkJobFolders(db, vaultRoot).catch(() => [])) console.log(`[vault] ${l.code || l.id} → ${l.folder}`);
+    await syncControl(db, vaultRoot).catch((err) => console.warn(`[claude] sync: ${err.message}`));
+    roster();
+  })();
   setInterval(roster, 15 * 60_000).unref();
   // Still on demo data? Keep trying the roster (OneDrive may still be downloading it) and switch over by itself.
   setInterval(async () => {
@@ -895,8 +902,4 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     if (await seedFromRoster(db, vaultRoot)) { console.log('Loaded your team and jobs from Zordon/zordon-roster.json.'); roster(); }
   }, 60_000).unref();
   setInterval(() => processInbox(db, vaultRoot).then((f) => f.length && console.log(`[vault] filed ${f.length} file(s) from _Inbox`)), 60_000).unref();
-  createServer(createApp(db, { voice })).listen(port, () => {
-    console.log(`\n  ⚡ Zordon Command Center online → http://localhost:${port}`);
-    console.log(`  Email intelligence: ${aiEnabled() ? 'Claude' : 'rule-based (set ANTHROPIC_API_KEY to enable Claude)'}\n`);
-  });
 }
