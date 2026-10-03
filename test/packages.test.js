@@ -129,3 +129,16 @@ test('finds the GEC2 OneDrive without a path in .env', async () => {
   assert.equal((await detectVault({ ZORDON_VAULT: '"C:\\nope"' }, home)).path, join(home, 'OneDrive - GECTWO'));
   assert.equal((await detectVault({ ZORDON_VAULT: `"${join(home, 'OneDrive - GECTWO')}\\"` }, home)).found, 'roster');
 });
+
+test('unflagged demo data from older versions is recognised', async () => {
+  const { seedIfEmpty } = await import('../server/db.js');
+  const dir = await mkdtemp(join(tmpdir(), 'zordon-legacy-'));
+  const file = join(dir, 'z.db');
+  let db = openDb(file);
+  seedIfEmpty(db, TODAY);
+  db.exec("DELETE FROM settings WHERE key = 'demo_data'"); // what older versions left behind
+  db.close();
+  db = openDb(file);
+  assert.equal(db.prepare("SELECT value FROM settings WHERE key = 'demo_data'").get()?.value, 'true');
+  db.close();
+});

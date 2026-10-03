@@ -243,6 +243,12 @@ function migrate(db) {
   }
   // The hourly email check may see the same message twice; the message id keeps it to one import.
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_message_id ON emails(message_id) WHERE message_id IS NOT NULL');
+  // Demo data from older versions wasn't flagged; recognise it (demo team at example.com, demo job AGM-101)
+  // so the real roster can replace it.
+  const flagged = db.prepare("SELECT 1 FROM settings WHERE key = 'demo_data'").get();
+  const demoJob = db.prepare("SELECT 1 FROM projects WHERE code = 'AGM-101'").get();
+  const realPeople = db.prepare("SELECT COUNT(*) AS n FROM people WHERE email IS NOT NULL AND email NOT LIKE '%@example.com' AND lower(email) != 'damian@gec2.com'").get().n;
+  if (!flagged && demoJob && !realPeople) db.prepare("INSERT INTO settings (key, value) VALUES ('demo_data', 'true')").run();
 }
 
 // Local calendar date as YYYY-MM-DD (job sites run on local time, not UTC).
