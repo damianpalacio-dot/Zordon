@@ -16,7 +16,7 @@ import { leadTime, createElectricalPlan, LEAD_TIMES } from './electrical.js';
 import { loadBuiltinSkills, listSkills, saveSkill, createJob, listJobs, syncControl, importJobResult, filingRules,
   importProposal, decideProposal, listProposals } from './claude.js';
 import { CATEGORY_NAMES, CATEGORY_FOLDERS, suggestName, finalize, textSnippet, uniquePath, saveFile, moveFile, deleteFile, vaultPath,
-  ensureProjectFolders, inboxFiles, readVaultFile, projectFolder, isJobNumber, JOB_TEMPLATE, CONTROL_DIR, INBOX, findJobFolder } from './vault.js';
+  ensureProjectFolders, inboxFiles, readVaultFile, projectFolder, isJobNumber, JOB_TEMPLATE, CONTROL_DIR, INBOX, findJobFolder, refineFolder } from './vault.js';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const STATIC_DIRS = {
@@ -137,7 +137,7 @@ const docSelect = `SELECT d.*, pr.name AS project_name, pr.code AS project_code,
 
 // Name and file one document. `buffer` is new content; `fromRel` moves a file already in the vault (the _Inbox).
 export async function fileDocument(db, vaultRoot, { buffer, fromRel, filename, project_id, task_id, hint, title, category, mime, notes }, today = isoDate()) {
-  const ctx = { projects: db.prepare('SELECT id, name, code FROM projects').all(), today };
+  const ctx = { projects: db.prepare('SELECT id, name, code, short_name, folder FROM projects').all(), today };
   const content = buffer ?? await readVaultFile(vaultRoot, fromRel);
   const suggestion = await suggestName({ filename, text: textSnippet(content, filename), project_id: project_id || null, hint: hint || '' }, ctx);
   // Explicit choices from the user win over the suggestion.
@@ -150,6 +150,12 @@ export async function fileDocument(db, vaultRoot, { buffer, fromRel, filename, p
       today,
     })
     : suggestion;
+  // Use the folder that best describes the document (the team's own subfolders count).
+  const project = ctx.projects.find((p) => p.id === chosen.project_id);
+  if (project) {
+    const full = db.prepare('SELECT * FROM projects WHERE id = ?').get(project.id);
+    chosen.folder = await refineFolder(vaultRoot, chosen.folder, projectFolder(full), `${hint || ''} ${title || ''} ${filename} ${chosen.title}`);
+  }
   const rel = await uniquePath(vaultRoot, chosen.folder, chosen.filename, fileExists);
   if (fromRel) await moveFile(vaultRoot, fromRel, rel);
   else await saveFile(vaultRoot, rel, content);
@@ -266,7 +272,7 @@ export async function processInbox(db, vaultRoot, today = isoDate()) {
 }
 
 export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.env.ZORDON_VAULT || join(ROOT, 'files'), voice = createVoiceSession() } = {}) {
-  const projectsCtx = () => ({ projects: db.prepare('SELECT id, name, code FROM projects').all(), today: today() });
+  const projectsCtx = () => ({ projects: db.prepare('SELECT id, name, code, short_name, folder FROM projects').all(), today: today() });
   const getDoc = (id) => mustExist(db.prepare(`${docSelect} WHERE d.id = ?`).get(Number(id)), 'Document');
   return [
     ['GET', '/api/health', () => ({ ok: true, ai: aiEnabled() })],

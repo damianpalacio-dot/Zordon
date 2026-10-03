@@ -349,3 +349,32 @@ test('jobs find their existing OneDrive folder by number, "number - title", or n
   assert.deepEqual(linked.map((l) => l.folder).sort(), ['5. PROJECTS/LAUSD 32ND ST', 'G2379 - LGB ATCT']);
   assert.equal(db.prepare("SELECT folder FROM projects WHERE name = 'Hand set'").get().folder, 'Somewhere/Else', 'a folder set by hand is kept');
 });
+
+test('documents land in the folder that best describes them, including the team\'s own subfolders', async () => {
+  const { refineFolder, subfolderScore } = await import('../server/vault.js');
+  const { mkdir } = await import('node:fs/promises');
+  const root = await mkdtemp(join(tmpdir(), 'zordon-best-'));
+  for (const d of ['5. PROJECTS/G2707/07 RFIS', '5. PROJECTS/G2707/ERCCS', '5. PROJECTS/G2707/IFC SET CHANGES', '5. PROJECTS/G2707/14 SUBMITTALS/26 24 16 PANELBOARDS',
+    '5. PROJECTS/G2707/14 SUBMITTALS/28 31 00 FIRE ALARM', '5. PROJECTS/G3052/EXISTING PANELS', '5. PROJECTS/G3052/14 SUBMITTALS']) {
+    await mkdir(join(root, d), { recursive: true });
+  }
+  const job = '5. PROJECTS/G2707';
+  assert.equal(await refineFolder(root, `${job}/14 SUBMITTALS`, job, 'Submittal ERCCS radio coverage test plan'), `${job}/ERCCS`);
+  assert.equal(await refineFolder(root, `${job}/04 DESIGN CHANGES`, job, 'IFC set changes level 2 south'), `${job}/IFC SET CHANGES`);
+  assert.equal(await refineFolder(root, `${job}/14 SUBMITTALS`, job, 'Spec 26 24 16 panelboards Siemens rev 1'), `${job}/14 SUBMITTALS/26 24 16 PANELBOARDS`);
+  assert.equal(await refineFolder(root, `${job}/14 SUBMITTALS`, job, 'Lighting fixtures cut sheets'), `${job}/14 SUBMITTALS`, 'no good match keeps the standard folder');
+  assert.equal(await refineFolder(root, `${job}/07 RFIS`, job, 'RFI 14 response'), `${job}/07 RFIS`, 'generic words never decide');
+  assert.equal(await refineFolder(root, '5. PROJECTS/G3052/03 CONSTRUCTION SET', '5. PROJECTS/G3052', 'Existing panels survey HM1 photos'), '5. PROJECTS/G3052/EXISTING PANELS');
+  assert.equal(subfolderScore('SUB', 'submittal sub 01'), 0);
+
+  // End to end through the _Inbox.
+  const db = freshDb();
+  db.prepare("INSERT INTO projects (name, code, short_name) VALUES ('Burbank Airport Replacement Passenger Terminal', 'G2707', 'BURB RPT')").run();
+  await mkdir(join(root, 'Zordon', '_Inbox'), { recursive: true });
+  const f = join(root, 'Zordon', '_Inbox', 'G2707 ERCCS submittal radio coverage.txt');
+  await writeFile(f, 'ERCCS submittal');
+  await utimes(f, new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
+  const [filed] = await processInbox(db, root, TODAY);
+  const doc = db.prepare('SELECT path FROM documents WHERE id = ?').get(filed.id);
+  assert.match(doc.path, /^5\. PROJECTS\/G2707\/ERCCS\/G2707_BURB RPT - SUBMITTAL - /);
+});

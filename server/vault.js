@@ -119,6 +119,39 @@ export async function findJobFolder(root, project) {
   return best?.path || null;
 }
 
+// ---------- Picking the folder that best describes a document ----------
+// Words too common to decide a folder on their own.
+const GENERIC = new Set(['GEC2', 'ELECTRICAL', 'ELEC', 'SUB', 'SUBMITTAL', 'SUBMITTALS', 'RFI', 'RFIS', 'DRAWING', 'DRAWINGS', 'DWG',
+  'PDF', 'REV', 'REVISION', 'COPY', 'FINAL', 'DRAFT', 'NEW', 'OLD', 'FILES', 'DOCS', 'DOCUMENTS', 'MISC', 'GENERAL', 'LEVEL', 'SET']);
+const specKeys = (t) => [...String(t).matchAll(/\b(\d{2})\s?(\d{2})\s?(\d{2})\b/g)].map((m) => m.slice(1).join(''));
+
+export function subfolderScore(folderName, hay) {
+  const ht = new Set(tokens(hay));
+  const strong = tokens(folderName).filter((w) => !GENERIC.has(w) && (w.length >= 4 || /^[A-Z]{3}$/.test(w)) && ht.has(w));
+  const specs = specKeys(folderName).filter((k) => specKeys(hay).includes(k));
+  return strong.length + specs.length * 3;
+}
+
+// Within a job folder, prefer one of the team's own subfolders (ERCCS, IFC SET CHANGES, EXISTING PANELS…)
+// when the document clearly belongs there; then look one level down inside the chosen folder
+// (e.g. 14 SUBMITTALS/26 24 16 PANELBOARDS). Ties or weak matches keep the standard folder.
+export async function refineFolder(root, folder, jobBase, hay) {
+  const best = async (base, skip = new Set()) => {
+    const dirs = (await readdir(vaultPath(root, base), { withFileTypes: true }).catch(() => []))
+      .filter((d) => d.isDirectory() && !d.name.startsWith('.') && !skip.has(d.name.toUpperCase()));
+    const scored = dirs.map((d) => ({ name: d.name, score: subfolderScore(d.name, hay) })).filter((d) => d.score > 0)
+      .sort((a, b) => b.score - a.score);
+    return scored.length && (scored.length === 1 || scored[0].score > scored[1].score) ? scored[0].name : null;
+  };
+  let out = folder;
+  if (jobBase && folder.startsWith(jobBase)) {
+    const custom = await best(jobBase, new Set(JOB_TEMPLATE.map((f) => f.toUpperCase())));
+    if (custom) out = `${jobBase}/${custom}`;
+  }
+  const inner = await best(out);
+  return inner ? `${out}/${inner}` : out;
+}
+
 export const usDate = (iso) => { const [y, m, d] = iso.split('-'); return `${m}.${d}.${y}`; };
 
 export function textSnippet(buffer, filename) {

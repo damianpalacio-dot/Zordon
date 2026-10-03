@@ -57,6 +57,11 @@ Every project lives in \`5. PROJECTS/<Job #>/\` (for example \`5. PROJECTS/G2707
 the job's name (\`LAUSD 32ND ST\` for 32nd St). Use that folder. Create \`5. PROJECTS/<Job #>\` only when nothing matches.
 The roster's \`folder\` field records the match for each job.
 
+**The folder that best describes it:** inside the job, if one of the team's own subfolders clearly fits the document
+(\`G2707/ERCCS\`, \`G2707/IFC SET CHANGES\`, \`G3052/EXISTING PANELS\`), use it instead of the standard folder below. Then look
+one level down (e.g. \`14 SUBMITTALS/26 24 16 PANELBOARDS\` for a panelboard submittal). Generic words like "submittal" or
+"RFI" never decide on their own; when two subfolders fit equally, use the standard folder.
+
 Start-up folders:
 
 ${JOB_TEMPLATE.map((f) => `- \`${f}\``).join('\n')}
