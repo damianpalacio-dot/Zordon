@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Zordon Command Center</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/vendor/three/build/three.module.js",
+        "three/addons/": "/vendor/three/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div class="shell">
+    <nav class="sidebar" aria-label="Main">
+      <a class="brand" href="#/command" aria-label="Zordon Command Center">
+        <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M18 2 6 18h8l-2 12 14-18h-8l2-10z"/></svg>
+        <span>ZORDON</span>
+      </a>
+      <a href="#/command" data-view="command"><i>◉</i><span>Command</span></a>
+      <a href="#/focus" data-view="focus"><i>⚑</i><span>My Focus</span></a>
+      <a href="#/board" data-view="board"><i>▦</i><span>Board</span></a>
+      <a href="#/projects" data-view="projects"><i>◈</i><span>Projects</span></a>
+      <a href="#/doccontrol" data-view="doccontrol"><i>📐</i><span>RFIs &amp; Submittals</span><b class="badge" id="badge-doccontrol" hidden></b></a>
+      <a href="#/schedule" data-view="schedule"><i>▤</i><span>Schedule &amp; Equip.</span></a>
+      <a href="#/meetings" data-view="meetings"><i>◷</i><span>Meetings</span></a>
+      <a href="#/inbox" data-view="inbox"><i>✉</i><span>Email Intel</span><b class="badge" id="badge-inbox" hidden></b></a>
+      <a href="#/reminders" data-view="reminders"><i>✆</i><span>Reminders</span><b class="badge" id="badge-reminders" hidden></b></a>
+      <a href="#/vault" data-view="vault"><i>🗄</i><span>File Vault</span></a>
+      <a href="#/team" data-view="team"><i>☗</i><span>Rangers</span></a>
+    </nav>
+    <main id="view" tabindex="-1"></main>
+  </div>
+  <aside class="drawer" id="drawer" aria-hidden="true"></aside>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>
