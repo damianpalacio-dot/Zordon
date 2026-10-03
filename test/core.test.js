@@ -186,6 +186,9 @@ test('file names follow the convention', () => {
   assert.equal(name({ filename: 'COR 073 CA#291-5777.pdf', project_id: 1 }).filename, 'G2707_BURB RPT - COR 073 - CA 291-5777 (10.03.2026).pdf');
   const sub = name({ filename: 'G3251 - 32nd St - Spec 26 2416 Sub 01 - Panelboards Siemens.pdf' });
   assert.equal(sub.folder, '5. PROJECTS/G3251/14 SUBMITTALS');
+  projects[1].folder = '5. PROJECTS/LAUSD 32ND ST'; // jobs whose folder isn't named by number
+  assert.equal(name({ filename: 'x.pdf', hint: 'RFI 9 conduit', project_id: 2 }).folder, '5. PROJECTS/LAUSD 32ND ST/07 RFIS');
+  delete projects[1].folder;
   assert.equal(sub.filename, 'G3251_32ND ST - SUBMITTAL - Spec 26 2416 Sub 01 - Panelboards Siemens (10.03.2026).pdf');
   assert.equal(name({ filename: 'x.pdf', hint: 'Pay app 6 backup', project_id: 2 }).folder, '5. PROJECTS/G3251/01 COST CONTROL');
   assert.equal(slug('Pay app #6 — backup (final)'), 'Pay-App-6-Backup-Final');

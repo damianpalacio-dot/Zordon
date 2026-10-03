@@ -170,7 +170,8 @@ export function importEmailBatch(db, batch, today = isoDate()) {
     if (!p?.name) continue;
     const exists = db.prepare('SELECT id FROM projects WHERE (code IS NOT NULL AND lower(code) = lower(?)) OR lower(name) = lower(?)').get(p.code || '', p.name);
     if (!exists) {
-      db.prepare('INSERT INTO projects (name, code, short_name, location) VALUES (?, ?, ?, ?)').run(String(p.name), p.code || null, p.short_name || null, p.location || null);
+      db.prepare('INSERT INTO projects (name, code, short_name, folder, location) VALUES (?, ?, ?, ?, ?)')
+        .run(String(p.name), p.code || null, p.short_name || null, p.folder && !String(p.folder).includes('..') ? p.folder : null, p.location || null);
       result.new_projects++;
     }
   }
@@ -209,7 +210,7 @@ export async function writeRoster(db, vaultRoot) {
     updated_at: new Date().toISOString(),
     me: db.prepare('SELECT name, email FROM people WHERE id = ?').get(mePersonId(db) ?? -1) || null,
     people: db.prepare('SELECT name, role, trade, email FROM people WHERE active = 1').all(),
-    projects: db.prepare("SELECT name, code, short_name, location FROM projects WHERE status != 'closed'").all(),
+    projects: db.prepare("SELECT name, code, short_name, folder, location FROM projects WHERE status != 'closed'").all(),
   };
   await saveFile(vaultRoot, `${CONTROL_DIR}/zordon-roster.json`, Buffer.from(JSON.stringify(roster, null, 2)), { overwrite: true });
 }
@@ -300,7 +301,8 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
     }],
     ['PATCH', '/api/projects/:id', async ({ params, body }) => {
       const before = mustExist(db.prepare('SELECT * FROM projects WHERE id = ?').get(Number(params.id)), 'Project');
-      const f = pick(body, ['name', 'code', 'short_name', 'location', 'status']);
+      const f = pick(body, ['name', 'code', 'short_name', 'folder', 'location', 'status']);
+      if ('folder' in f && f.folder && (String(f.folder).includes('..') || /^[a-z]:|^\//i.test(f.folder))) throw new HttpError(400, 'Folder must be a path inside the OneDrive, e.g. 5. PROJECTS/LAUSD 32ND ST');
       oneOf(f.status, ['active', 'on_hold', 'closed'], 'status');
       if ('location' in f) Object.assign(f, { lat: null, lon: null }); // re-geocode for weather
       update(db, 'projects', params.id, f);

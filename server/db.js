@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS projects (
   code TEXT,
   location TEXT,
   short_name TEXT,
+  folder TEXT,
   lat REAL,
   lon REAL,
   status TEXT NOT NULL DEFAULT 'active'
@@ -215,7 +216,7 @@ export function openDb(file = process.env.ZORDON_DB || 'data/zordon.db') {
 
 // Columns added after the first release; CREATE TABLE IF NOT EXISTS won't add them to older databases.
 const ADDED_COLUMNS = {
-  projects: { lat: 'REAL', lon: 'REAL', short_name: 'TEXT' },
+  projects: { lat: 'REAL', lon: 'REAL', short_name: 'TEXT', folder: 'TEXT' },
   tasks: { estimate_hours: 'REAL' },
   routines: { day_of_month: 'INTEGER' },
   emails: { message_id: 'TEXT' },

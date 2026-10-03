@@ -77,6 +77,8 @@ export function shortName(project) {
 
 export function projectFolder(project) {
   if (!project) return UNFILED;
+  // A job whose folder isn't named after its number (e.g. "5. PROJECTS/LAUSD 32ND ST").
+  if (project.folder) return String(project.folder).replace(/^\/+|\/+$/g, '');
   const job = cleanName(project.code || project.name || `Project ${project.id}`, 40);
   return projectsDir() ? `${projectsDir()}/${job}` : job;
 }

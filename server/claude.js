@@ -89,7 +89,7 @@ function jobFile(job) {
 
 function jobPayload(db, job) {
   const task = job.task_id ? db.prepare('SELECT id, title, description, due_date, priority FROM tasks WHERE id = ?').get(job.task_id) : null;
-  const project = job.project_id ? db.prepare('SELECT name, code, short_name, location FROM projects WHERE id = ?').get(job.project_id) : null;
+  const project = job.project_id ? db.prepare('SELECT name, code, short_name, folder, location FROM projects WHERE id = ?').get(job.project_id) : null;
   return {
     type: 'zordon.job',
     id: job.id,

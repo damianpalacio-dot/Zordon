@@ -52,8 +52,9 @@ async function projects(el, _p, { render }) {
     if (name === null) return;
     const code = prompt('Job number (e.g. G2707)', p.code || '');
     const short_name = prompt('Short name used in file names (e.g. BURB RPT)', p.short_name || '');
+    const folder = prompt('OneDrive folder, only if it is NOT "5. PROJECTS/<job #>" (e.g. 5. PROJECTS/LAUSD 32ND ST)', p.folder || '');
     const status = prompt('Status: active, on_hold or closed', p.status);
-    guard(async () => { await api(`/api/projects/${p.id}`, { method: 'PATCH', body: { name, code, short_name, status } }); render(); });
+    guard(async () => { await api(`/api/projects/${p.id}`, { method: 'PATCH', body: { name, code, short_name, folder: folder || null, status } }); render(); });
   });
 }
 
