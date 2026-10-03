@@ -451,6 +451,14 @@ export async function render() {
   refreshBadges();
 }
 
+// While showing demo data, check every 30 s whether the real roster has loaded and switch over.
+setInterval(async () => {
+  if (!store.meta.demo) return;
+  const meta = await api('/api/meta').catch(() => null);
+  if (meta && !meta.demo) render();
+  else if (meta) refreshRefs();
+}, 30_000);
+
 async function refreshBadges() {
   const d = await api('/api/dashboard').catch(() => null);
   if (!d) return;

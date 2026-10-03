@@ -80,9 +80,11 @@ export async function refreshRefs() {
   const banner = document.getElementById('demo-banner');
   if (banner) {
     banner.hidden = !meta.demo;
-    banner.textContent = meta.vault_set
-      ? `DEMO DATA: Zordon is looking in "${meta.vault}" but can't find Zordon\\zordon-roster.json there. Set ZORDON_VAULT in .env to the folder that holds "5. PROJECTS" and "Zordon", then restart.`
-      : 'DEMO DATA: Zordon could not find your GEC2 OneDrive. Make sure OneDrive is signed in and synced, or set ZORDON_VAULT in .env, then restart Zordon.';
+    banner.textContent = !meta.vault_set
+      ? 'DEMO DATA: Zordon could not find your GEC2 OneDrive. Make sure OneDrive is signed in and synced, then restart Zordon.'
+      : meta.roster_error === 'not found'
+        ? `DEMO DATA: Zordon is looking in "${meta.vault}" but there is no Zordon\\zordon-roster.json there. Set ZORDON_VAULT in .env to the folder that holds "5. PROJECTS" and "Zordon", then restart.`
+        : `DEMO DATA: found your OneDrive (${meta.vault}) — waiting for OneDrive to download Zordon\\zordon-roster.json. In File Explorer, right-click the Zordon folder → "Always keep on this device". Zordon switches to your jobs within a minute.`;
   }
   return store;
 }

@@ -249,13 +249,22 @@ export async function linkJobFolders(db, vaultRoot) {
 }
 
 // First start against a real OneDrive: load the team and jobs from Zordon/zordon-roster.json instead of demo data.
+export const rosterStatus = { error: null };
+
 // Load the real team and jobs from OneDrive. Runs on an empty database, or replaces the demo data
 // once the roster can be found (e.g. ZORDON_VAULT was set after the first start).
 export async function seedFromRoster(db, vaultRoot) {
   const isDemo = db.prepare("SELECT value FROM settings WHERE key = 'demo_data'").get()?.value === 'true';
   if (!isDemo && db.prepare('SELECT COUNT(*) AS n FROM people').get().n > 0) return false;
   let roster;
-  try { roster = JSON.parse((await readVaultFile(vaultRoot, `${CONTROL_DIR}/zordon-roster.json`)).toString('utf8')); } catch { return false; }
+  try {
+    roster = JSON.parse((await readVaultFile(vaultRoot, `${CONTROL_DIR}/zordon-roster.json`)).toString('utf8'));
+    rosterStatus.error = null;
+  } catch (err) {
+    // OneDrive "online-only" files may still be downloading; the caller retries every minute.
+    rosterStatus.error = err.code === 'ENOENT' ? 'not found' : `could not read it yet (${err.code || err.message})`;
+    return false;
+  }
   const people = Array.isArray(roster.people) ? roster.people.filter((p) => p?.name) : [];
   if (!people.length) return false;
   if (isDemo) clearDemo(db);
@@ -367,7 +376,7 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
     ['POST', '/api/voice/goodbye', () => voice.goodbye()],
     ['POST', '/api/voice/say', ({ body }) => ({ spoken: say(required(body.text, 'text')) })],
     ['GET', '/api/meta', () => ({ statuses: STATUSES, priorities: PRIORITIES, colors: RANGER_COLORS, ai: aiEnabled(), today: today(),
-      demo: db.prepare("SELECT value FROM settings WHERE key = 'demo_data'").get()?.value === 'true', vault_set: Boolean(process.env.ZORDON_VAULT), vault: process.env.ZORDON_VAULT || null })],
+      demo: db.prepare("SELECT value FROM settings WHERE key = 'demo_data'").get()?.value === 'true', vault_set: Boolean(process.env.ZORDON_VAULT), vault: process.env.ZORDON_VAULT || null, roster_error: rosterStatus.error })],
     ['GET', '/api/dashboard', () => {
       runRoutines(db, today());
       return {
@@ -772,7 +781,7 @@ async function serveStatic(pathname, res) {
       const info = await stat(file);
       if (info.isDirectory()) rel = join(rel, 'index.html');
       const target = info.isDirectory() ? join(file, 'index.html') : file;
-      res.writeHead(200, { 'content-type': MIME[extname(target)] || 'application/octet-stream' });
+      res.writeHead(200, { 'content-type': MIME[extname(target)] || 'application/octet-stream', 'cache-control': 'no-cache' });
       res.end(await readFile(target));
       return true;
     } catch {
@@ -865,6 +874,11 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const roster = () => writeRoster(db, vaultRoot).catch((err) => console.warn(`[vault] roster: ${err.message}`));
   roster();
   setInterval(roster, 15 * 60_000).unref();
+  // Still on demo data? Keep trying the roster (OneDrive may still be downloading it) and switch over by itself.
+  setInterval(async () => {
+    if (db.prepare("SELECT value FROM settings WHERE key = 'demo_data'").get()?.value !== 'true') return;
+    if (await seedFromRoster(db, vaultRoot)) { console.log('Loaded your team and jobs from Zordon/zordon-roster.json.'); roster(); }
+  }, 60_000).unref();
   setInterval(() => processInbox(db, vaultRoot).then((f) => f.length && console.log(`[vault] filed ${f.length} file(s) from _Inbox`)), 60_000).unref();
   createServer(createApp(db, { voice })).listen(port, () => {
     console.log(`\n  ⚡ Zordon Command Center online → http://localhost:${port}`);
