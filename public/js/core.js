@@ -77,6 +77,13 @@ export const store = { people: [], projects: [], meta: { statuses: [], prioritie
 export async function refreshRefs() {
   const [people, projects, meta] = await Promise.all([api('/api/people'), api('/api/projects'), api('/api/meta')]);
   Object.assign(store, { people, projects, meta });
+  const banner = document.getElementById('demo-banner');
+  if (banner) {
+    banner.hidden = !meta.demo;
+    banner.textContent = meta.vault_set
+      ? 'DEMO DATA: Zordon can\'t find Zordon/zordon-roster.json in your OneDrive. Check ZORDON_VAULT in .env, then restart Zordon.'
+      : 'DEMO DATA: set ZORDON_VAULT in the .env file to your GEC2 OneDrive folder, then restart Zordon. Your real team and jobs replace this automatically.';
+  }
   return store;
 }
 export const personById = (id) => store.people.find((p) => p.id === id);

@@ -38,6 +38,11 @@ Open http://localhost:4000. The first run loads demo data so you can click aroun
 
 When Zordon starts, he says *"Good morning, Damian. Make today a day better than the last."* through your computer's speakers. He says *"May the Power protect you"* when you close the window or shut him down. Set `ZORDON_VOICE=off` to silence him.
 
+**Demo data vs your real data:** Zordon shows demo jobs (Angel Grove Medical…) only until it finds
+`Zordon/zordon-roster.json` in your OneDrive. Set `ZORDON_VAULT` in `.env` and restart; the demo is replaced with your
+team and jobs automatically. To wipe the board on this computer and start over, double-click
+`scripts/reset-zordon.bat` (it keeps a backup in `data/backups` and never touches OneDrive).
+
 ### Updating
 
 When Claude pushes changes, close Zordon and double-click `scripts/update-zordon.bat` (Mac: `update-zordon.command`),

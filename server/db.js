@@ -246,6 +246,17 @@ function migrate(db) {
 }
 
 // Local calendar date as YYYY-MM-DD (job sites run on local time, not UTC).
+// Remove the demo team, jobs and everything attached to them (used when the real roster shows up).
+export function clearDemo(db) {
+  if (db.prepare("SELECT value FROM settings WHERE key = 'demo_data'").get()?.value !== 'true') return false;
+  db.exec('PRAGMA foreign_keys = OFF');
+  for (const t of ['task_updates', 'reminders', 'documents', 'tracked_items', 'packages', 'schedule_activities', 'equipment', 'routines',
+    'meetings', 'emails', 'tasks', 'claude_jobs', 'proposals', 'projects', 'people']) db.exec(`DELETE FROM ${t}`);
+  db.exec("DELETE FROM settings WHERE key IN ('demo_data', 'me_person_id', 'vip_senders')");
+  db.exec('PRAGMA foreign_keys = ON');
+  return true;
+}
+
 export function isoDate(d = new Date()) {
   const p = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
@@ -341,6 +352,7 @@ export function seedIfEmpty(db, today = isoDate()) {
     .run('Submit monthly pay application (billing)', 'Collect sub pay apps, update schedule of values and stored materials, get lien waivers, submit the G702/G703 on time.', pm, null);
   routine.run('Review change order log — push pending COs to approval', 'Chase owner approvals, price open PCOs, and convert approved COs into billing.', pm, null, 5, 1);
   db.prepare("INSERT INTO settings (key, value) VALUES ('me_person_id', ?)").run(String(pm));
+  db.prepare("INSERT INTO settings (key, value) VALUES ('demo_data', 'true')").run();
 
   const meeting = db.prepare(`INSERT INTO meetings (project_id, title, starts_at, duration_min, location, attendee_ids, agenda)
     VALUES (?, ?, ?, ?, ?, ?, ?)`);

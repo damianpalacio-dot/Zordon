@@ -13,6 +13,14 @@ echo Download the Windows .zip from https://nodejs.org/en/download and unzip it 
 pause
 exit /b 1
 :havenode
+rem Settings: Notepad sometimes saves ".env" as ".env.txt"; fix that, and create .env on the first run.
+if not exist .env if exist .env.txt ren .env.txt .env
+if not exist .env (
+  copy .env.example .env >nul
+  echo First run: set ZORDON_VAULT to your GEC2 OneDrive folder, e.g. C:\Users\Palacio\OneDrive - GECTWO
+  echo Save and close Notepad to continue.
+  notepad .env
+)
 if not exist node_modules (call npm install)
 start "Zordon server" /min cmd /c "npm start"
 timeout /t 3 /nobreak >nul

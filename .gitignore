@@ -6,3 +6,4 @@ files/
 dist/
 node/
 node-v*/
+data/backups/

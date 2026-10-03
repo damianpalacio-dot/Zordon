@@ -4,7 +4,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { timingSafeEqual } from 'node:crypto';
-import { openDb, seedIfEmpty, isoDate, addDays, STATUSES, PRIORITIES, RANGER_COLORS } from './db.js';
+import { openDb, seedIfEmpty, clearDemo, isoDate, addDays, STATUSES, PRIORITIES, RANGER_COLORS } from './db.js';
 import { analyzeEmail, aiEnabled, resolveRefs } from './intel.js';
 import { moneyPriority, dashboard, listTasks, getTask, listMeetings, projectSummaries, reminderDrafts, realityCheck, myNudges } from './ops.js';
 import { WATCH_GROUPS, parseNotificationEmail, upsertItems, listItems, docControlSummary, getSetting, setSetting, mePersonId } from './doccontrol.js';
@@ -249,12 +249,16 @@ export async function linkJobFolders(db, vaultRoot) {
 }
 
 // First start against a real OneDrive: load the team and jobs from Zordon/zordon-roster.json instead of demo data.
+// Load the real team and jobs from OneDrive. Runs on an empty database, or replaces the demo data
+// once the roster can be found (e.g. ZORDON_VAULT was set after the first start).
 export async function seedFromRoster(db, vaultRoot) {
-  if (db.prepare('SELECT COUNT(*) AS n FROM people').get().n > 0) return false;
+  const isDemo = db.prepare("SELECT value FROM settings WHERE key = 'demo_data'").get()?.value === 'true';
+  if (!isDemo && db.prepare('SELECT COUNT(*) AS n FROM people').get().n > 0) return false;
   let roster;
   try { roster = JSON.parse((await readVaultFile(vaultRoot, `${CONTROL_DIR}/zordon-roster.json`)).toString('utf8')); } catch { return false; }
   const people = Array.isArray(roster.people) ? roster.people.filter((p) => p?.name) : [];
   if (!people.length) return false;
+  if (isDemo) clearDemo(db);
   const colors = RANGER_COLORS;
   const insertPerson = db.prepare('INSERT INTO people (name, role, trade, email, color) VALUES (?, ?, ?, ?, ?)');
   const ids = people.map((p, i) => Number(insertPerson.run(String(p.name), p.role || 'Team', p.trade || null, p.email || null, colors[i % colors.length]).lastInsertRowid));
@@ -303,6 +307,8 @@ export function applyVip(email, tasks, vips, today = isoDate()) {
 
 // Who and what Zordon knows, so the hourly email check can assign owners and projects by name.
 export async function writeRoster(db, vaultRoot) {
+  // Never push the demo team over the real roster in OneDrive.
+  if (db.prepare("SELECT value FROM settings WHERE key = 'demo_data'").get()?.value === 'true') return null;
   const roster = {
     updated_at: new Date().toISOString(),
     me: db.prepare('SELECT name, email FROM people WHERE id = ?').get(mePersonId(db) ?? -1) || null,
@@ -360,7 +366,8 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
     }],
     ['POST', '/api/voice/goodbye', () => voice.goodbye()],
     ['POST', '/api/voice/say', ({ body }) => ({ spoken: say(required(body.text, 'text')) })],
-    ['GET', '/api/meta', () => ({ statuses: STATUSES, priorities: PRIORITIES, colors: RANGER_COLORS, ai: aiEnabled(), today: today() })],
+    ['GET', '/api/meta', () => ({ statuses: STATUSES, priorities: PRIORITIES, colors: RANGER_COLORS, ai: aiEnabled(), today: today(),
+      demo: db.prepare("SELECT value FROM settings WHERE key = 'demo_data'").get()?.value === 'true', vault_set: Boolean(process.env.ZORDON_VAULT) })],
     ['GET', '/api/dashboard', () => {
       runRoutines(db, today());
       return {
@@ -819,6 +826,10 @@ export function createApp(db, opts = {}) {
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const db = openDb();
   const vaultRootForSeed = process.env.ZORDON_VAULT || join(ROOT, 'files');
+  if (!process.env.ZORDON_VAULT) console.warn('ZORDON_VAULT is not set in .env — Zordon cannot see your OneDrive and will show demo data.');
+  else if (!await stat(join(process.env.ZORDON_VAULT, CONTROL_DIR, 'zordon-roster.json')).catch(() => null)) {
+    console.warn(`No Zordon/zordon-roster.json under ${process.env.ZORDON_VAULT} — check that ZORDON_VAULT is your GEC2 OneDrive folder.`);
+  }
   if (await seedFromRoster(db, vaultRootForSeed)) console.log('Loaded your team and jobs from Zordon/zordon-roster.json.');
   else if (process.env.ZORDON_SEED !== 'off' && seedIfEmpty(db)) console.log('Seeded demo data (set ZORDON_SEED=off to skip).');
   const voice = createVoiceSession();

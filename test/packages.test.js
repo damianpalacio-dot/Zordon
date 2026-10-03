@@ -97,3 +97,23 @@ test('a note dropped as a plain file still files normally when there is no numbe
   assert.match(db.prepare('SELECT path FROM documents WHERE id = ?').get(a.id).path, /^5\. PROJECTS\/G2707\/01 COST CONTROL\/G2707_BURB RPT - COR - /);
   assert.equal(listPackages(db).length, 0);
 });
+
+test('demo data is replaced by the OneDrive roster once it can be found', async () => {
+  const { seedIfEmpty } = await import('../server/db.js');
+  const { seedFromRoster, writeRoster } = await import('../server/index.js');
+  const db = openDb(':memory:');
+  seedIfEmpty(db, TODAY);
+  const root = await mkdtemp(join(tmpdir(), 'zordon-roster-'));
+  assert.equal(await writeRoster(db, root), null); // demo never overwrites the real roster
+  await mkdir(join(root, 'Zordon'), { recursive: true });
+  await writeFile(join(root, 'Zordon/zordon-roster.json'), JSON.stringify({
+    me: { email: 'damian@gec2.com' },
+    people: [{ name: 'Damian Palacio', email: 'damian@gec2.com', role: 'Project Manager' }, { name: 'Vick Deguzman', role: 'Project Engineer' }],
+    projects: [{ name: 'Burbank Replacement Terminal', code: 'G2707', short_name: 'BURB RPT' }],
+  }));
+  assert.equal(await seedFromRoster(db, root), true);
+  assert.deepEqual(db.prepare('SELECT name FROM people ORDER BY id').all().map((p) => p.name), ['Damian Palacio', 'Vick Deguzman']);
+  assert.deepEqual(db.prepare('SELECT code FROM projects').all().map((p) => p.code), ['G2707']);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n, 0);
+  assert.equal(await seedFromRoster(db, root), false); // real data is never replaced
+});
