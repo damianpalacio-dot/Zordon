@@ -466,10 +466,20 @@ async function meetings(el, _p, { render, openTask }) {
 
 // ---------------- Email intel ----------------
 async function inbox(el, params, { render }) {
-  const emails = await api('/api/emails');
+  const [emails, ib] = await Promise.all([api('/api/emails'), api('/api/inbox/status')]);
   const selected = params.get('id') ? await api(`/api/emails/${params.get('id')}`) : null;
+  const flow = ib.errors.length ? ['h-delayed', `Can't read ${ib.errors.length} file(s) in the inbox`]
+    : ib.waiting.length ? ['h-due_soon', `${ib.waiting.length} file(s) waiting`]
+      : ib.last_import ? ['h-done', `Last import ${new Date(ib.last_import.at).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}: ${ib.last_import.emails} email(s), ${ib.last_import.tasks} task(s)`]
+        : ['', 'Waiting for the hourly email check (workdays 5am–8pm)'];
   el.innerHTML = `
     <div class="page-head"><div><h1>Email Intel</h1><p>Paste an email — Zordon pulls out the tasks, meetings, RFIs and submittals. ${store.meta.ai ? '<span class="pill h-done">Claude on</span>' : '<span class="pill">Rule-based · add ANTHROPIC_API_KEY for Claude</span>'}</p></div></div>
+    <section class="panel" style="margin-bottom:16px">
+      <div class="row"><b>Hourly email check</b><span class="pill ${flow[0]}">${esc(flow[1])}</span><span class="spacer"></span>
+        <button class="btn" id="check-inbox">⟳ Check now</button></div>
+      <div class="small muted mono" style="margin-top:6px">${esc(ib.inbox)}${ib.checked_at ? ` · checked ${esc(new Date(ib.checked_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }))}` : ''}</div>
+      ${ib.errors.map((e) => `<div class="small" style="color:var(--red,#ff6b6b);margin-top:4px">${esc(e.file)}: ${esc(e.error)}</div>`).join('')}
+    </section>
     <div class="grid two">
       <div class="grid" style="align-content:start">
         <section class="panel"><h2>New email</h2>
@@ -485,6 +495,11 @@ async function inbox(el, params, { render }) {
       </div>
       <section class="panel" style="align-self:start" id="review">${selected ? review(selected) : '<div class="empty">Analyze or pick an email to review its suggestions.</div>'}</section>
     </div>`;
+  el.querySelector('#check-inbox').addEventListener('click', () => guard(async () => {
+    const r = await api('/api/inbox/check', { method: 'POST', body: {} });
+    toast(r.errors.length ? `Couldn't read ${r.errors.length} file(s) — see the note` : r.last_import ? `Imported ${r.last_import.tasks} task(s)` : 'Nothing new in the inbox');
+    render();
+  }));
   el.querySelector('#email-form').addEventListener('submit', (e) => {
     e.preventDefault();
     const btn = e.target.querySelector('button');

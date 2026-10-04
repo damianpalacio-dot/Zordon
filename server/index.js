@@ -1,5 +1,6 @@
 // Zordon Command Center — HTTP API + static UI, no framework.
 import { createServer } from 'node:http';
+import { spawn } from 'node:child_process';
 import { readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -337,11 +338,18 @@ export async function writeRoster(db, vaultRoot) {
 
 const categoryForPath = (path) => Object.entries(CATEGORY_FOLDERS).find(([, f]) => f && path.includes(`/${f}/`))?.[0] || 'General';
 
+// What the _Inbox check saw last, so the screen can say whether email is flowing.
+export const inboxStatus = { checked_at: null, waiting: [], last_import: null, errors: [] };
+
 export async function processInbox(db, vaultRoot, today = isoDate()) {
   const filed = [];
+  inboxStatus.checked_at = new Date().toISOString();
+  inboxStatus.errors = [];
   let linked = false;
   const link = async () => { if (!linked) { linked = true; await linkJobFolders(db, vaultRoot).catch(() => {}); } };
-  for (const f of await inboxFiles(vaultRoot)) {
+  const files = await inboxFiles(vaultRoot);
+  inboxStatus.waiting = files.map((f) => f.name);
+  for (const f of files) {
     try {
       if (/\.proposal\.zordon\.json$/i.test(f.name)) {
         importProposal(db, JSON.parse((await readVaultFile(vaultRoot, f.rel)).toString('utf8')));
@@ -360,14 +368,18 @@ export async function processInbox(db, vaultRoot, today = isoDate()) {
         linked = false; // new jobs may have arrived
         await moveFile(vaultRoot, f.rel, `${f.rel.replace(/[^/]+$/, '')}.imported/${f.name}`);
         console.log(`[email] imported ${result.emails} email(s): ${result.tasks} task(s), ${result.meetings} meeting(s), ${result.duplicates} already seen`);
+        inboxStatus.last_import = { at: new Date().toISOString(), file: f.name, ...result };
         continue;
       }
       await link();
       filed.push(await fileDocument(db, vaultRoot, { fromRel: f.rel, filename: f.name }, today));
     } catch (err) {
       console.warn(`[vault] could not file ${f.name}: ${err.message}`);
+      inboxStatus.errors.push({ file: f.name, error: err.code === 'EPERM' || err.code === 'EACCES' || /cloud|provider/i.test(err.message)
+        ? `OneDrive did not download it (${err.code || err.message}). Right-click the OneDrive Zordon folder → Always keep on this device.` : err.message });
     }
   }
+  inboxStatus.waiting = (await inboxFiles(vaultRoot)).map((f) => f.name);
   return filed;
 }
 
@@ -553,6 +565,8 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
     ['POST', '/api/cleanup/undo', async ({ body }) => {
       try { return await undoArchive(vaultRoot, required(body.log, 'log')); } catch (err) { throw new HttpError(400, err.message); }
     }],
+    ['GET', '/api/inbox/status', () => ({ ...inboxStatus, inbox: join(vaultRoot, INBOX) })],
+    ['POST', '/api/inbox/check', async () => { await processInbox(db, vaultRoot, today()); return { ...inboxStatus, inbox: join(vaultRoot, INBOX) }; }],
     // ----- OneDrive browser -----
     ['GET', '/api/onedrive', ({ query }) => (query.path === undefined ? oneDriveStatus(vaultRoot)
       : listFolder(vaultRoot, query.path).catch((err) => { throw new HttpError(err.status || 404, err.status ? err.message : 'Folder not found'); }))],
@@ -888,6 +902,11 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   setInterval(cycle, Number(process.env.ZORDON_SYNC_MINUTES || 30) * 60_000).unref();
   // File anything saved into the vault's _Inbox folder every minute (documents, and hourly email batches).
   const vaultRoot = process.env.ZORDON_VAULT || join(ROOT, 'files');
+  // Keep OneDrive's Zordon folder downloaded on this PC ("Always keep on this device"), so email batches and the
+  // roster are always readable. Windows only; harmless elsewhere.
+  if (process.platform === 'win32' && process.env.ZORDON_VAULT) {
+    spawn('attrib', ['+P', '-U', join(vaultRoot, CONTROL_DIR), '/S', '/D'], { stdio: 'ignore', windowsHide: true }).on('error', () => {});
+  }
   await loadBuiltinSkills(db);
   // Open the doors first; scanning OneDrive can take a while and the window shouldn't wait on it.
   createServer(createApp(db, { voice })).listen(port, () => {
@@ -899,6 +918,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     for (const l of await linkJobFolders(db, vaultRoot).catch(() => [])) console.log(`[vault] ${l.code || l.id} → ${l.folder}`);
     await syncControl(db, vaultRoot).catch((err) => console.warn(`[claude] sync: ${err.message}`));
     roster();
+    processInbox(db, vaultRoot).catch((err) => console.warn(`[vault] inbox: ${err.message}`));
   })();
   setInterval(roster, 15 * 60_000).unref();
   // Still on demo data? Keep trying the roster (OneDrive may still be downloading it) and switch over by itself.
