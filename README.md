@@ -95,25 +95,25 @@ name on the Projects page. Zordon only creates job start-up folders for real G##
 **The `_Inbox` habit:** save anything into `OneDrive/Zordon/_Inbox` and Zordon names it and files it within a minute.
 The same folder carries the hourly email batches, Claude job results and habit proposals.
 
-### Change order and submittal packages
+### The job template is the source of truth
 
-Every COR and every submittal gets its own folder, with a numbered stage folder for each step:
+Zordon follows OneDrive **`5. PROJECTS/0. JOB TEMPLATE - DO NOT DELETE`** (folders, blank forms and its README):
 
-```
-01 COST CONTROL/CHANGE ORDERS/COR 073 - Ice and Water Machine Power/
-    01 BACKUP  02 T&M  03 QUOTES  04 WORKUP  05 SUBMITTED  06 APPROVED  07 BILLED
-14 SUBMITTALS/26 24 16 Panelboards/
-    01 VENDOR DATA  02 GEC2 REVIEW  03 SUBMITTED  04 RETURNED  05 APPROVED  06 RELEASED  07 CLOSEOUT
-```
+- It re-reads the template every 5 minutes. When you or Claude change it, Zordon's filing follows, `Zordon/FILING.md`
+  is rewritten (README included) so Cowork follows too, and File Vault → Job template shows what changed.
+- A new job gets a full copy of the template as `5. PROJECTS/<Job #> - <Description>`. For existing jobs,
+  **Add missing template folders to all active jobs** adds folders only (never moves, renames or overwrites).
+- File names use `YYYY-MM-DD` dates: `G2707_BURB RPT - RFI 14 - Beam at C4 - 2026-10-03.pdf`.
 
-- Start one on **RFIs & Submittals → Start a package**, or drop a file in `_Inbox` with the COR number or spec section in
-  its name ("COR 73 Graybar quote", "26 24 16 panelboards approved"). Zordon creates the folder and files the
-  document in the right stage.
-- Existing folders are reused, even under older names (`Change Request 073`, `262416 PANELBOARDS`), and so are
-  their `Quotes`, `T&M` and `ENDSHEET` folders.
-- Each stage puts the next step on your list. A submitted COR gets a GC follow-up in 7 days, and an approved COR gets
-  "Bill on the next pay app" (Critical). A returned submittal gets revise-and-resubmit, and an approved one gets
-  "Release equipment". Packages only move forward when you file; set any stage by hand from the board.
+**Change orders** follow the template: `01 COST CONTROL/04 CHANGE ORDERS/<1 PENDING | 2 SUBMITTED | 3 APPROVED |
+4 REJECTED-VOID>/CO 03 - <description>/`, each a copy of `_CO FOLDER TEMPLATE (DUPLICATE ME)` (01 PRICING - BACKUP,
+02 RFP-RFI REFERENCE, 03 T&M TAGS, 04 APPROVED CO DOCUMENTATION). Files are named `CO 03 - …` (the proposal sent to the
+GC also carries the job number). When a document shows the CO was submitted, approved or rejected, Zordon moves the
+whole CO folder to that status folder and adds the next steps: follow up with the GC, update the Job Control Workbook,
+bill it on the next pay app.
+
+**Submittals** get one folder per spec section (`14 SUBMITTALS/26 2416 - PANELBOARDS`); their status (submitted,
+returned, approved, released) is tracked on RFIs & Submittals.
 
 ## Claude Link (Cowork)
 
@@ -194,7 +194,7 @@ Zordon is built to run on your own computer. Before you put it on a server or op
 
 ```bash
 npm run dev    # restart on file changes
-npm test       # 42 tests: parsing, scheduling, doc control, naming, packages, archive, API
+npm test       # 50 tests: parsing, scheduling, doc control, naming, packages, archive, API
 ```
 
 - `server/`: zero-framework Node HTTP server. SQLite via Node's built-in `node:sqlite` (`data/zordon.db`).

@@ -136,7 +136,7 @@ async function commandView(el) {
   api('/api/weather').then((sites) => {
     const box = el.querySelector('#weather');
     if (!box) return;
-    box.innerHTML = sites.map(weatherCard).join('') || '<div class="small dim">Add a city to a project (Projects → Edit) to see its weather.</div>';
+    box.innerHTML = weatherPanel(sites);
     const first = sites.find((w) => w.current);
     if (first) el.querySelector('#hud-weather').textContent = `${first.current.icon} ${first.current.temp_f}°F ${first.location.split(',')[0].toUpperCase()}`;
     const warnings = sites.flatMap((w) => (w.days || []).slice(0, 2).flatMap((day, i) => day.impacts.map((x) => `${i ? 'Tomorrow' : 'Today'} at ${w.project_name}: ${x.text.split(' — ')[0]}.`)));
@@ -197,18 +197,35 @@ export const itemRow = (today) => (i) => `
     ${i.due_date ? `<span class="pill ${i.due_date < today ? 'h-delayed' : 'h-due_soon'}">${relDays(i.due_date, today)}</span>` : ''}
   </a>`;
 
-const weatherCard = (w) => {
-  if (w.error) return `<div class="wx"><b>${esc(w.project_name)}</b><div class="small dim">${esc(w.error)}</div></div>`;
-  const flags = w.days.slice(0, 2).flatMap((day, i) => day.impacts.map((x) => ({ ...x, when: i ? 'Tomorrow' : 'Today' })));
-  return `<div class="wx">
-    <div class="row"><span class="wx-now">${w.current.icon} ${w.current.temp_f}°</span>
-      <div class="grow"><b>${esc(w.project_name)}</b><div class="small muted">${esc(w.location)} · ${esc(w.current.text)} · feels ${w.current.feels_f}° · wind ${w.current.wind_mph} mph</div></div></div>
-    <div class="wx-days">${w.days.map((day, i) => `<div class="${day.impacts.length ? 'flag' : ''}" title="${esc(day.impacts.map((x) => x.text).join('\n') || day.text)}">
-      <span class="small dim">${i ? fmtDate(day.date, { weekday: 'short' }) : 'Today'}</span><span class="wx-ic">${day.icon}</span>
-      <span class="small"><b>${day.temp_max_f}°</b> <span class="dim">${day.temp_min_f}°</span></span><span class="small dim">💧${day.precip_prob}%</span></div>`).join('')}</div>
-    ${flags.map((x) => `<div class="small wx-flag ${x.level}">⚠ ${x.when}: ${esc(x.text)}</div>`).join('')}
-  </div>`;
-};
+// One compact line per city (jobs in the same city share the forecast), a 4-day strip, and the work warnings
+// gathered underneath instead of repeated on every job.
+function weatherPanel(sites) {
+  const ok = sites.filter((w) => w.current);
+  if (!ok.length) return '<div class="small dim">Add a city to a project (Projects → Edit) to see its weather.</div>';
+  const groups = new Map();
+  for (const w of ok) {
+    const key = String(w.location || '').split(',')[0].trim().toLowerCase();
+    if (!groups.has(key)) groups.set(key, { w, jobs: [] });
+    groups.get(key).jobs.push(w.project_code || w.project_name);
+  }
+  const flags = [];
+  const rows = [...groups.values()].map(({ w, jobs }) => {
+    const city = String(w.location).split(',')[0];
+    w.days.slice(0, 2).forEach((day, i) => day.impacts.forEach((x) => flags.push({ ...x, city, when: i ? 'Tomorrow' : 'Today' })));
+    return `<div class="wx-row" title="${esc(`${w.location} · ${w.current.text} · feels ${w.current.feels_f}° · wind ${w.current.wind_mph} mph`)}">
+      <div class="wx-loc"><b>${esc(city)}</b><span class="small dim">${esc(jobs.slice(0, 4).join(' · '))}${jobs.length > 4 ? ` +${jobs.length - 4}` : ''}</span></div>
+      <div class="wx-now">${w.current.icon} ${w.current.temp_f}°</div>
+      <div class="wx-strip">${w.days.slice(0, 4).map((day, i) => `<span class="${day.impacts.length ? 'flag' : ''}${day.precip_prob >= 40 ? ' wet' : ''}" title="${esc([day.text, `Rain ${day.precip_prob}%`, ...day.impacts.map((x) => x.text)].join('\n'))}">
+        <i>${i ? fmtDate(day.date, { weekday: 'short' }) : 'Today'}${day.precip_prob >= 40 ? ` 💧${day.precip_prob}%` : ''}</i><b>${day.icon} ${day.temp_max_f}°<em>/${day.temp_min_f}°</em></b></span>`).join('')}</div>
+    </div>`;
+  }).join('');
+  const seen = new Set();
+  const warn = flags.filter((x) => { const k = `${x.when}|${x.city}|${x.text}`; if (seen.has(k)) return false; seen.add(k); return true; });
+  const missing = sites.length - ok.length;
+  return `<div class="wx-list">${rows}</div>
+    ${warn.length ? `<div class="wx-warn">${warn.slice(0, 4).map((x) => `<div class="small wx-flag ${x.level}">⚠ ${x.when} · ${esc(x.city)}: ${esc(x.text.split(' — ')[0])}</div>`).join('')}</div>` : '<div class="small dim" style="margin-top:6px">No weather impacts on the work today or tomorrow.</div>'}
+    ${missing ? `<div class="small dim" style="margin-top:4px">${missing} job(s) without a city — add one under Projects → Edit.</div>` : ''}`;
+}
 
 const rangerCard = (p) => `
   <div class="ranger c-${esc(p.color)}" data-person="${p.id}">

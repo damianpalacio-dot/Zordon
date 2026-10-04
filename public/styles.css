@@ -376,3 +376,17 @@ body:has(#demo-banner:not([hidden])) #view { padding-top: 76px; }
 .crumbs a { color: var(--cyan, #5ad1ff); text-decoration: none; }
 .crumbs a:hover { text-decoration: underline; }
 .od-row:hover td { background: rgba(90, 209, 255, .06); }
+.wx-list { display: grid; gap: 4px; }
+.wx-row { display: grid; grid-template-columns: minmax(84px, 1fr) auto minmax(0, 2.8fr); gap: 8px; align-items: center; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: rgba(7, 14, 25, .7); }
+.wx-loc { display: grid; min-width: 0; }
+.wx-loc b, .wx-loc span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wx-row .wx-now { font-size: 16px; }
+.wx-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
+.wx-strip span { display: grid; justify-items: center; padding: 2px 2px; border-radius: 4px; background: #0b1626; border: 1px solid transparent; line-height: 1.3; min-width: 0; }
+.wx-strip span.flag { border-color: var(--amber); }
+.wx-strip span.wet { background: #0c1b30; }
+.wx-strip i { font-style: normal; color: var(--dim, #7f93ad); font-size: 10px; letter-spacing: .05em; text-transform: uppercase; white-space: nowrap; }
+.wx-strip b { font-size: 12px; white-space: nowrap; font-weight: 600; }
+.wx-strip em { font-style: normal; color: var(--dim, #7f93ad); font-weight: 400; }
+.wx-warn { margin-top: 6px; display: grid; gap: 2px; }
+@media (max-width: 700px) { .wx-row { grid-template-columns: 1fr auto; } .wx-strip { grid-column: 1 / -1; } }

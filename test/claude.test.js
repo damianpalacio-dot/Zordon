@@ -16,7 +16,7 @@ const TODAY = '2026-10-03';
 async function setup() {
   const db = openDb(':memory:');
   seedIfEmpty(db, TODAY);
-  db.prepare("UPDATE projects SET code = 'G3251', short_name = '32ND ST' WHERE id = 1").run();
+  db.prepare("UPDATE projects SET code = 'G3251', short_name = '32ND ST', folder = '5. PROJECTS/G3251' WHERE id = 1").run();
   await loadBuiltinSkills(db);
   const root = await mkdtemp(join(tmpdir(), 'zordon-claude-'));
   return { db, root };

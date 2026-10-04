@@ -15,12 +15,13 @@ import { createVoiceSession, greeting, say, FAREWELL } from './voice.js';
 import { projectWeather } from './weather.js';
 import { scanOld, applyPlan, listArchiveLogs, undoArchive } from './cleanup.js';
 import { oneDriveStatus, listFolder, openOnComputer } from './onedrive.js';
-import { STAGES, packageType, stageFor, ensurePackage, stageFolder, specKey, recordPackage, setStage, listPackages } from './packages.js';
+import { STAGES, packageType, stageFor, ensurePackage, coSubfolder, coLabel, specKey, recordPackage, setStage, listPackages } from './packages.js';
+import { template, loadTemplate, copyTemplate, templateDir } from './template.js';
 import { leadTime, createElectricalPlan, LEAD_TIMES } from './electrical.js';
 import { loadBuiltinSkills, listSkills, saveSkill, createJob, listJobs, syncControl, importJobResult, filingRules,
   importProposal, decideProposal, listProposals } from './claude.js';
 import { CATEGORY_NAMES, CATEGORY_FOLDERS, suggestName, finalize, textSnippet, uniquePath, saveFile, moveFile, deleteFile, vaultPath,
-  ensureProjectFolders, inboxFiles, readVaultFile, projectFolder, isJobNumber, JOB_TEMPLATE, CONTROL_DIR, INBOX, findJobFolder, refineFolder, detectVault } from './vault.js';
+  ensureProjectFolders, inboxFiles, readVaultFile, projectFolder, isJobNumber, JOB_TEMPLATE, CONTROL_DIR, INBOX, findJobFolder, refineFolder, detectVault, cleanName } from './vault.js';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const STATIC_DIRS = {
@@ -162,31 +163,98 @@ export async function fileDocument(db, vaultRoot, { buffer, fromRel, filename, p
   if (project) {
     const full = db.prepare('SELECT * FROM projects WHERE id = ?').get(project.id);
     pkg = await packageFor(db, vaultRoot, full, chosen, hay, today);
-    chosen.folder = pkg ? pkg.folder : await refineFolder(vaultRoot, chosen.folder, projectFolder(full), hay);
+    if (pkg) {
+      chosen.folder = pkg.folder;
+      if (pkg.filename) chosen.filename = `${pkg.filename}${extname(chosen.filename)}`;
+    } else chosen.folder = await refineFolder(vaultRoot, chosen.folder, projectFolder(full), hay);
   }
   const rel = await uniquePath(vaultRoot, chosen.folder, chosen.filename, fileExists);
   if (fromRel) await moveFile(vaultRoot, fromRel, rel);
   else await saveFile(vaultRoot, rel, content);
-  if (pkg?.stage) setStage(db, pkg.id, pkg.stage, { today, me: mePersonId(db), addTask: (t) => createTask(db, t) });
   const id = db.prepare(`INSERT INTO documents (project_id, task_id, title, category, original_name, path, size, mime, notes)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(chosen.project_id, task_id ? Number(task_id) : null, chosen.title, chosen.category,
     filename, rel, content.length, mime || null, notes || null).lastInsertRowid;
   return { id: Number(id), analyzer: suggestion.analyzer };
 }
 
-// A COR with a number, or a submittal with a spec section, goes into its own package folder and stage:
-// 01 COST CONTROL/CHANGE ORDERS/COR 073 - <title>/05 SUBMITTED. Returns null for everything else.
+// A CO with a number, or a submittal with a spec section, goes into its own folder as the job template lays out:
+//   01 COST CONTROL/04 CHANGE ORDERS/<status>/CO 03 - <title>/<subfolder>   named "CO 03 - <description>"
+//   14 SUBMITTALS/26 2416 - <TITLE>
+// A document that shows a new status (submitted, approved, rejected) moves the CO folder there. Null for anything else.
 async function packageFor(db, vaultRoot, project, chosen, hay, today) {
   const type = packageType(chosen.category);
   if (!type) return null;
-  const desc = chosen.title.replace(/^[A-Z ]+?(\s[\w.-]*\d[\w.-]*)?\s-\s/, '');
-  const number = type === 'cor' ? chosen.title.match(/^COR (\d+)\b/)?.[1] : null;
+  const desc = chosen.title.replace(/^[A-Z ]+?(\s(?:\d{2} \d{2} ?\d{2}|[\w.-]*\d[\w.-]*))?\s-\s/, '');
+  const number = type === 'cor' ? chosen.title.match(/^CO (\d+)\b/)?.[1] : null;
   const spec_section = type === 'submittal' ? specKey(hay) : null;
   if (type === 'cor' ? !number : !spec_section) return null;
-  const folder = await ensurePackage(vaultRoot, projectFolder(project), type, { number, spec_section, title: desc });
-  const stage = stageFor(type, hay);
-  const rec = recordPackage(db, { project_id: project.id, type, number, spec_section, title: desc, folder }, today);
-  return { id: rec.id, stage, folder: await stageFolder(vaultRoot, folder, stage) };
+  // The CO / submittal folder is named for the change or the equipment, not for this particular document.
+  const folderTitle = desc.replace(/^\d{2}(\s?\d{2}){0,2}\s*-?\s*/, '')
+    .replace(/\b(graybar|ced|quotes?|quotation|pricing|backup|back-up|t\s?&\s?m|tags?|tickets?|proposal|cover letter|submitted|sent to (the )?gc|approved|fully signed|signed|executed|rejected|void|product data|cut ?sheets?|shop drawings?|no exceptions taken|revise and resubmit|returned|transmittal)\b/gi, ' ')
+    .replace(/\s+/g, ' ').trim().replace(/^(for|of|the|and|to|on|re)\b\s*/i, '') || desc;
+  const found = await ensurePackage(vaultRoot, projectFolder(project), type, { number, spec_section, title: folderTitle });
+  let rec = recordPackage(db, { project_id: project.id, type, number, spec_section, title: folderTitle, folder: found.folder, stage: found.stage }, today);
+  const docStage = stageFor(type, hay);
+  if (docStage) {
+    rec = (await setStage(db, rec.id, docStage, { today, me: mePersonId(db), addTask: (t) => createTask(db, t), root: vaultRoot })).package;
+  }
+  if (type !== 'cor') return { id: rec.id, folder: rec.folder };
+  const sub = await coSubfolder(vaultRoot, rec.folder, hay);
+  // Files in a CO folder carry the CO number; the proposal that goes to the GC also carries the job number.
+  const proposal = /proposal|cover letter|submitted|sent to (the )?gc/i.test(hay);
+  const tm = /t\s?&\s?m|\btags?\b|ticket/i.test(hay);
+  const filename = cleanName(`${coLabel(number)}${proposal && project.code ? ` - ${project.code}` : ''} - ${desc}${tm ? ` - ${today}` : ''}`, 150);
+  return { id: rec.id, folder: sub ? `${rec.folder}/${sub}` : rec.folder, filename };
+}
+
+// ---------- The job template ----------
+// A new job gets a full copy of the template (folders and blank forms). A job that already has a folder only gets the
+// template folders it's missing; nothing is ever moved, renamed or overwritten.
+export async function setUpJobFolder(vaultRoot, project) {
+  if (!template.found) return ensureProjectFolders(vaultRoot, project);
+  return copyTemplate(vaultRoot, projectFolder(project), { foldersOnly: Boolean(project.folder) });
+}
+
+export async function applyTemplateToJobs(db, vaultRoot) {
+  const projects = db.prepare("SELECT * FROM projects WHERE status = 'active'").all().filter((p) => isJobNumber(p.code));
+  const results = [];
+  for (const p of projects) {
+    const added = await setUpJobFolder(vaultRoot, p).catch((err) => { console.warn(`[template] ${p.code}: ${err.message}`); return 0; });
+    results.push({ code: p.code, folder: projectFolder(p), added: typeof added === 'number' ? added : 0 });
+  }
+  return { template: template.found ? templateDir() : null, jobs: results, folders_added: results.reduce((n, r) => n + r.added, 0) };
+}
+
+// Re-read the template; when it changed (new folders, renamed stages, new README rules), remember what changed and
+// rewrite FILING.md so Claude picks it up too.
+export async function checkTemplate(db, vaultRoot) {
+  const res = await loadTemplate(vaultRoot);
+  if (!template.found) return res;
+  const saved = getSetting(db, 'template_signature', null);
+  if (saved !== template.signature) {
+    const prevPaths = new Set(getSetting(db, 'template_paths', []));
+    const nowPaths = template.tree.map((t) => t.path);
+    const added = saved ? nowPaths.filter((x) => !prevPaths.has(x)) : [];
+    const removed = saved ? [...prevPaths].filter((x) => !nowPaths.includes(x)) : [];
+    setSetting(db, 'template_signature', template.signature);
+    setSetting(db, 'template_paths', nowPaths);
+    if (saved) {
+      const log = [{ at: new Date().toISOString(), added, removed }, ...getSetting(db, 'template_changes', [])].slice(0, 20);
+      setSetting(db, 'template_changes', log);
+      console.log(`[template] job template changed: +${added.length} / -${removed.length}`);
+    }
+    await syncControl(db, vaultRoot).catch((err) => console.warn(`[claude] sync: ${err.message}`));
+  }
+  return res;
+}
+
+function templateStatus(db) {
+  return {
+    found: template.found, path: templateDir(), checked_at: template.checked_at,
+    folders: template.dirs.length, files: template.files.length, top: JOB_TEMPLATE,
+    change_orders: template.found ? template.co : null, has_readme: Boolean(template.readme),
+    changes: getSetting(db, 'template_changes', []),
+  };
 }
 
 // A batch of already-analyzed emails, written to the vault's _Inbox by the hourly Claude email check.
@@ -438,8 +506,8 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
       await linkJobFolders(db, vaultRoot).catch(() => {});
       const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
       // Real GEC2 jobs (G####) get the job start-up folders; other projects are left alone.
-      if (isJobNumber(project.code)) await ensureProjectFolders(vaultRoot, project).catch((err) => console.warn(`[vault] ${err.message}`));
-      return project;
+      if (isJobNumber(project.code)) await setUpJobFolder(vaultRoot, project).catch((err) => console.warn(`[vault] ${err.message}`));
+      return db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
     }],
     ['PATCH', '/api/projects/:id', async ({ params, body }) => {
       const before = mustExist(db.prepare('SELECT * FROM projects WHERE id = ?').get(Number(params.id)), 'Project');
@@ -550,11 +618,11 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
       const filed = await processInbox(db, vaultRoot, today());
       return filed.map(({ id, analyzer }) => ({ ...getDoc(id), analyzer }));
     }],
-    ['POST', '/api/vault/folders', async () => {
-      const projects = db.prepare("SELECT * FROM projects WHERE status != 'closed'").all().filter((p) => isJobNumber(p.code));
-      for (const p of projects) await ensureProjectFolders(vaultRoot, p);
-      return { root: vaultRoot, projects: projects.map((p) => projectFolder(p)), folders: JOB_TEMPLATE };
-    }],
+    ['POST', '/api/vault/folders', () => applyTemplateToJobs(db, vaultRoot)],
+    // ----- The OneDrive job template ("5. PROJECTS/0. JOB TEMPLATE - DO NOT DELETE") -----
+    ['GET', '/api/template', () => templateStatus(db)],
+    ['POST', '/api/template/apply', () => applyTemplateToJobs(db, vaultRoot)],
+    ['POST', '/api/template/check', async () => { await checkTemplate(db, vaultRoot); return templateStatus(db); }],
     // ----- Archive old files (moves only, logged, undoable) -----
     ['POST', '/api/cleanup/scan', async ({ body }) => {
       const areas = (Array.isArray(body.areas) ? body.areas : ['root', 'documents', 'projects']).filter((a) => ['root', 'documents', 'projects'].includes(a));
@@ -622,23 +690,29 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
     // ----- Change order & submittal packages -----
     ['GET', '/api/packages', ({ query }) => ({
       packages: listPackages(db, { ...query, open: query.open === '1' }),
-      stages: Object.fromEntries(Object.entries(STAGES).map(([k, v]) => [k, v.map(([name, what]) => ({ name, what }))])),
+      stages: { cor: STAGES.cor, submittal: STAGES.submittal },
     })],
     // Start a package by hand: creates the folder with every stage subfolder and starts tracking it.
     ['POST', '/api/packages', async ({ body }) => {
       const type = required(['cor', 'submittal'].includes(body.type) ? body.type : null, 'type (cor or submittal)');
       const project = mustExist(db.prepare('SELECT * FROM projects WHERE id = ?').get(Number(body.project_id)), 'Project');
-      if (type === 'cor' && !/^\d+$/.test(String(body.number || '').trim())) throw Object.assign(new Error('COR number is required'), { status: 400 });
-      if (type === 'submittal' && !specKey(body.spec_section)) throw Object.assign(new Error('Spec section is required (e.g. 26 24 16)'), { status: 400 });
-      const info = { number: String(body.number || '').trim(), spec_section: body.spec_section, title: required(body.title, 'title') };
-      const folder = await ensurePackage(vaultRoot, projectFolder(project), type, info);
-      const pkg = recordPackage(db, { project_id: project.id, type, ...info, folder, amount: body.amount ? Number(body.amount) : null }, today());
-      return body.stage ? setStage(db, pkg.id, body.stage, { today: today(), me: mePersonId(db), addTask: (t) => createTask(db, t) }).package : pkg;
+      // CO numbers are assigned per job, in order, and never reused: blank means "next number".
+      let number = String(body.number || '').trim();
+      if (type === 'cor' && !number) {
+        const last = db.prepare("SELECT MAX(CAST(number AS INTEGER)) AS n FROM packages WHERE project_id = ? AND type = 'cor'").get(project.id).n;
+        number = String((last || 0) + 1);
+      }
+      if (type === 'cor' && !/^\d+$/.test(number)) throw new HttpError(400, 'CO number must be a number');
+      if (type === 'submittal' && !specKey(body.spec_section)) throw new HttpError(400, 'Spec section is required (e.g. 26 24 16)');
+      const info = { number, spec_section: body.spec_section, title: required(body.title, 'title') };
+      const found = await ensurePackage(vaultRoot, projectFolder(project), type, info);
+      const pkg = recordPackage(db, { project_id: project.id, type, ...info, folder: found.folder, stage: found.stage, amount: body.amount ? Number(body.amount) : null }, today());
+      return body.stage ? (await setStage(db, pkg.id, body.stage, { today: today(), me: mePersonId(db), addTask: (t) => createTask(db, t), root: vaultRoot })).package : pkg;
     }],
     ['PATCH', '/api/packages/:id', ({ params, body }) => {
       if (body.amount !== undefined) db.prepare('UPDATE packages SET amount = ? WHERE id = ?').run(body.amount === '' ? null : Number(body.amount), Number(params.id));
       return setStage(db, Number(params.id), body.stage ?? mustExist(db.prepare('SELECT stage FROM packages WHERE id = ?').get(Number(params.id)), 'Package').stage,
-        { force: true, today: today(), me: mePersonId(db), addTask: (t) => createTask(db, t) });
+        { force: true, today: today(), me: mePersonId(db), addTask: (t) => createTask(db, t), root: vaultRoot });
     }],
     ['DELETE', '/api/packages/:id', ({ params }) => {
       db.prepare('DELETE FROM packages WHERE id = ?').run(Number(params.id));
@@ -912,6 +986,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     spawn('attrib', ['+P', '-U', join(vaultRoot, CONTROL_DIR), '/S', '/D'], { stdio: 'ignore', windowsHide: true }).on('error', () => {});
   }
   await loadBuiltinSkills(db);
+  await checkTemplate(db, vaultRoot).catch((err) => console.warn(`[template] ${err.message}`));
+  console.log(template.found ? `Job template: ${templateDir()} (${template.dirs.length} folders)` : `No job template at ${templateDir()} yet — using the standard folders.`);
+  setInterval(() => checkTemplate(db, vaultRoot).catch(() => {}), 5 * 60_000).unref();
   // Open the doors first; scanning OneDrive can take a while and the window shouldn't wait on it.
   createServer(createApp(db, { voice })).listen(port, () => {
     console.log(`\n  ⚡ Zordon Command Center online → http://localhost:${port}`);

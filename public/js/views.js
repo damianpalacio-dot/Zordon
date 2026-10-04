@@ -204,9 +204,9 @@ function packagesPanel({ packages, stages }) {
   const lane = (type, heading) => {
     const list = packages.filter((p) => p.type === type);
     return `<section class="panel"><header><h2>${heading}</h2><span class="small dim">${list.length} open</span></header>
-      <div class="pkg-stages">${stages[type].map((s) => `<span title="${esc(s.what)}" class="pill small ${list.some((p) => p.stage === s.name) ? 'h-due_soon' : ''}">${esc(s.name)} · ${list.filter((p) => p.stage === s.name).length}</span>`).join('')}</div>
+      <div class="pkg-stages">${stages[type].map((s) => `<span title="${esc(s.what)}${s.folder ? ` · folder: ${esc(s.folder)}` : ''}" class="pill small ${list.some((p) => p.stage === s.name) ? 'h-due_soon' : ''}">${esc(s.name)} · ${list.filter((p) => p.stage === s.name).length}</span>`).join('')}</div>
       <div class="list">${list.map((p) => `<div class="item">
-        <span class="pill">${type === 'cor' ? `COR ${esc(p.number)}` : esc(p.spec_section)}</span>
+        <span class="pill">${type === 'cor' ? `CO ${esc(p.number)}` : esc(p.spec_section)}</span>
         <div class="grow"><div class="title">${esc(p.title)}${p.amount ? ` <span class="mono" style="color:var(--gold)">$${Number(p.amount).toLocaleString()}</span>` : ''}</div>
           <div class="small dim mono">${esc(p.project_code || p.project_name || '')} · ${esc(p.folder || '')}</div></div>
         <select data-stage="${p.id}">${stages[type].map((s) => `<option ${s.name === p.stage ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>
@@ -214,12 +214,13 @@ function packagesPanel({ packages, stages }) {
   };
   return `<div class="grid two" style="margin-bottom:16px">${lane('cor', '💲 Change orders')}${lane('submittal', '📦 Submittal packages')}</div>
     <section class="panel" style="margin-bottom:16px"><h2>Start a package</h2>
-      <p class="small muted">Creates the folder with every stage inside (CORs: 01 BACKUP → 07 BILLED; submittals: 01 VENDOR DATA → 07 CLOSEOUT).
-        Files you drop in <span class="mono">Zordon/_Inbox</span> with the COR number or spec section land in the right stage, and each stage puts the next step on your list.</p>
+      <p class="small muted">Follows your job template: a change order becomes <span class="mono">04 CHANGE ORDERS/1 PENDING/CO 03 - …</span> (a copy of the CO folder template) and
+        moves to SUBMITTED / APPROVED / REJECTED-VOID as its status changes; a submittal gets its spec folder <span class="mono">14 SUBMITTALS/26 2416 - …</span>.
+        Files dropped in <span class="mono">Zordon/_Inbox</span> with the CO number or spec section land in the right place, and each status puts the next step on your list.</p>
       <form class="form-grid" id="new-pkg" style="margin-top:10px">
-        <label class="field">Type<select name="type"><option value="cor">Change order (COR)</option><option value="submittal">Submittal</option></select></label>
+        <label class="field">Type<select name="type"><option value="cor">Change order (CO)</option><option value="submittal">Submittal</option></select></label>
         <label class="field">Project<select name="project_id" required>${options(store.projects, '', { empty: '—' })}</select></label>
-        <label class="field">COR #<input name="number" placeholder="073"></label>
+        <label class="field">CO # <span class="dim">(blank = next)</span><input name="number" placeholder="03"></label>
         <label class="field">Spec section<input name="spec_section" placeholder="26 24 16"></label>
         <label class="field">Title<input name="title" required placeholder="Ice and water machine power"></label>
         <label class="field">Amount ($)<input name="amount" type="number" step="0.01"></label>
@@ -596,16 +597,24 @@ async function reminders(el, _p, { render }) {
 async function vault(el, params, { render }) {
   const f = Object.fromEntries(params);
   const qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString();
-  const [docs, categories, tasks, info] = await Promise.all([api(`/api/documents?${qs}`), api('/api/documents/categories'), api('/api/tasks?status='), api('/api/vault')]);
+  const [docs, categories, tasks, info, tpl] = await Promise.all([api(`/api/documents?${qs}`), api('/api/documents/categories'), api('/api/tasks?status='), api('/api/vault'), api('/api/template')]);
   const set = (k, v) => { const n = new URLSearchParams(f); if (v) n.set(k, v); else n.delete(k); location.hash = `#/vault?${n}`; };
   el.innerHTML = `
     <div class="page-head"><div><h1>File Vault</h1><p>Drop anything in. Zordon names it properly and files it by project and type, so you can find it months later.</p></div>
-      <div class="row"><button class="btn" id="mk-folders">📁 Create project folders</button><button class="btn primary" id="file-inbox">⚡ File _Inbox now</button></div></div>
+      <div class="row"><button class="btn primary" id="file-inbox">⚡ File _Inbox now</button></div></div>
     <section class="panel" style="margin-bottom:16px">
-      <div class="row"><span class="small muted">Vault folder</span><span class="mono">${esc(info.root)}</span></div>
-      <div class="row small muted" style="margin-top:6px">Save anything into <span class="mono">${esc(info.inbox)}</span> — it's renamed and filed within a minute.
-        Naming: <span class="mono">YYYY-MM-DD_JOB_Type_Description.ext</span> in <span class="mono">JOB-Project-Name/NN-Type/</span></div>
+      <header><h2>📐 Job template</h2>${tpl.found ? '<span class="pill h-done">● Following it</span>' : '<span class="pill h-due_soon">Not found</span>'}</header>
+      <div class="small muted mono">${esc(tpl.path)}</div>
+      <p class="small" style="margin-top:6px">${tpl.found
+        ? `${tpl.folders} folders${tpl.files ? `, ${tpl.files} forms/files` : ''}. Zordon checks it every 5 minutes: new jobs get a full copy, filing follows it, and FILING.md (for Claude) is rewritten when it changes.${tpl.checked_at ? ` Last checked ${esc(new Date(tpl.checked_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }))}.` : ''}`
+        : 'Zordon uses the standard GEC2 folders until this folder exists in OneDrive.'}</p>
       <div class="chips" style="margin-top:8px">${info.folders.map((x) => `<span class="chip">${esc(x)}</span>`).join('')}</div>
+      ${tpl.changes.length ? `<div class="small" style="margin-top:10px"><b>Recent template changes</b>${tpl.changes.slice(0, 3).map((c) => `<div class="dim">${esc(new Date(c.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))}: ${c.added.length ? `+ ${esc(c.added.slice(0, 4).join(', '))}${c.added.length > 4 ? ` +${c.added.length - 4} more` : ''}` : ''}${c.removed.length ? ` − ${esc(c.removed.slice(0, 3).join(', '))}` : ''}</div>`).join('')}</div>` : ''}
+      <div class="row" style="margin-top:10px"><button class="btn" id="tpl-check">⟳ Check template now</button>
+        <button class="btn" id="mk-folders" ${tpl.found ? '' : 'disabled'}>📁 Add missing template folders to all active jobs</button>
+        <span class="small dim">Adds folders only. Nothing is moved, renamed or overwritten.</span></div>
+      <div class="row small muted" style="margin-top:10px">Save anything into <span class="mono">${esc(info.inbox)}</span> and it's renamed and filed within a minute.
+        Names: <span class="mono">&lt;Job #&gt;_&lt;SHORT&gt; - TYPE - Description - YYYY-MM-DD.ext</span></div>
     </section>
     <div class="grid two">
       <section class="panel">
@@ -687,8 +696,13 @@ async function vault(el, params, { render }) {
     }));
   }));
   el.querySelector('#mk-folders').addEventListener('click', () => guard(async () => {
-    const r = await api('/api/vault/folders', { method: 'POST', body: {} });
-    toast(`Folder structure ready for ${r.projects.length} project(s)`);
+    const r = await api('/api/template/apply', { method: 'POST', body: {} });
+    toast(r.folders_added ? `Added ${r.folders_added} missing folder(s) across ${r.jobs.filter((j) => j.added).length} job(s)` : 'Every active job already has the template folders');
+  }));
+  el.querySelector('#tpl-check').addEventListener('click', () => guard(async () => {
+    const t = await api('/api/template/check', { method: 'POST', body: {} });
+    toast(t.found ? `Template: ${t.folders} folders` : 'Template folder not found in OneDrive');
+    render();
   }));
   el.querySelector('#file-inbox').addEventListener('click', () => guard(async () => {
     const filed = await api('/api/vault/inbox', { method: 'POST', body: {} });

@@ -3,7 +3,7 @@
 //   Zordon/skills/<name>/       the team's skill library (SKILL.md each), editable from Zordon
 //   Zordon/jobs/<id>-<skill>.json   work for Claude to do
 //   Zordon/_Inbox/job-<id>.result.zordon.json   Claude's report back
-import { STAGES } from './packages.js';
+import { template, templateDir, templateOutline, coLayout } from './template.js';
 import { readdir, readFile, rm } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
@@ -47,25 +47,28 @@ export function saveSkill(db, { name, title, description, output_category, body 
 
 export function filingRules(db) {
   const addenda = db ? JSON.parse(db.prepare("SELECT value FROM settings WHERE key = 'filing_addenda'").get()?.value || '[]') : [];
-  const rows = Object.entries(CATEGORY_FOLDERS).filter(([c]) => c !== 'General')
+  const rows = Object.entries(CATEGORY_FOLDERS).filter(([c, f]) => c !== 'General' && f)
     .map(([c, f]) => `| ${c} | ${f} |`).join('\n');
+  const co = coLayout();
   return `# GEC2 filing rules (Zordon)
 
-Every project lives in \`5. PROJECTS/<Job #>/\` (for example \`5. PROJECTS/G2707\`) with the GEC2 job start-up folders.
+**Source of truth: \`${templateDir()}\`.** That OneDrive folder is the master job template${template.found ? '' : ' (not found yet, so the standard folders below are used)'}.
+Zordon re-reads it every few minutes, so when Damian or Claude changes the template, these rules follow. Never delete or
+rename the template; for a new job, duplicate it into \`5. PROJECTS\` as \`<Job #> - <Description>\`
+(e.g. \`G3300 - Lincoln MS Fire Alarm Upgrade\`).
 
 **Finding a job's folder** (in \`5. PROJECTS\`, then the OneDrive root): 1) a folder named exactly by the job number
 (\`G2707\`); 2) a folder that starts with the job number and a title (\`G2379 - LGB ATCT\`); 3) a folder whose name matches
-the job's name (\`LAUSD 32ND ST\` for 32nd St). Use that folder. Create \`5. PROJECTS/<Job #>\` only when nothing matches.
-The roster's \`folder\` field records the match for each job.
+the job's name (\`LAUSD 32ND ST\` for 32nd St). Use that folder. Create \`5. PROJECTS/<Job #> - <Description>\` from the
+template only when nothing matches. The roster's \`folder\` field records the match for each job.
 
 **The folder that best describes it:** inside the job, if one of the team's own subfolders clearly fits the document
-(\`G2707/ERCCS\`, \`G2707/IFC SET CHANGES\`, \`G3052/EXISTING PANELS\`), use it instead of the standard folder below. Then look
-one level down (e.g. \`14 SUBMITTALS/26 24 16 PANELBOARDS\` for a panelboard submittal). Generic words like "submittal" or
-"RFI" never decide on their own; when two subfolders fit equally, use the standard folder.
+(\`G2707/ERCCS\`, \`G3052/EXISTING PANELS\`), use it. Then look one level down (a sub's folder under purchase orders, a spec
+section under submittals or specifications). Generic words never decide on their own; on a tie, use the standard folder.
 
-Start-up folders:
+## Job folder structure${template.found ? ' (from the template)' : ''}
 
-${JOB_TEMPLATE.map((f) => `- \`${f}\``).join('\n')}
+${template.found ? templateOutline() : JOB_TEMPLATE.map((f) => `- ${f}`).join('\n')}
 
 ## Where each document goes
 
@@ -76,29 +79,33 @@ ${rows}
 
 Unknown job? Save to \`Zordon/_Unfiled\` and say so.
 
-## Change order and submittal packages
+## Change orders
 
-Every change order and every submittal gets its own folder with numbered stage subfolders. Put each file in the stage
-it belongs to; the stage tells everyone where the package stands.
+\`${co.base}/<status>/CO 03 - <short description>/\`
+- Status folders: ${co.stages.map((x) => `\`${x.name}\``).join(', ')}. A CO folder lives in its status folder and the
+  whole folder moves when the status changes (Zordon moves it when it sees the CO submitted, approved or rejected).
+- New CO: ${co.folderTemplate ? `duplicate \`${co.folderTemplate.split('/').pop()}\` into the first status folder` : 'create the folder in the first status folder'}
+  and rename it \`CO 0X - description\`. Numbers go in order per job and are never reused; a GC number goes in
+  parentheses: \`CO 03 (GC PCO-012) - Additional Lighting Circuits\`.
+- Inside: ${co.subfolders.map((x) => `\`${x}\``).join(', ')}.
+- Files inside carry the CO number (\`CO 03 - T&M Tag - 2026-10-04.pdf\`); the proposal sent to the GC also carries the
+  job number (\`CO 03 - G3249 - Additional Lighting Circuits.pdf\`).
+- When a CO is approved or rejected, Zordon adds a task to update the job's GEC2_Job_Control_Workbook.xlsm (the source
+  of truth for COs, submittals and billing) and, once approved, to bill it.
 
-\`01 COST CONTROL/CHANGE ORDERS/COR 073 - Ice and Water Machine Power/\`
-${STAGES.cor.map(([name, what]) => `- \`${name}\`: ${what}`).join('\n')}
+## Submittals
 
-\`14 SUBMITTALS/26 24 16 Panelboards/\` (spec section, then the title)
-${STAGES.submittal.map(([name, what]) => `- \`${name}\`: ${what}`).join('\n')}
-
-Reuse an existing folder for the same COR number or spec section, even under an older name (\`Change Request 073\`,
-\`262416 PANELBOARDS\`), and its existing \`Quotes\`, \`T&M\` or \`ENDSHEET\` folders. COR numbers are 3 digits (\`COR 073\`).
-Mention the COR number or spec section and the stage word (quote, T&M, workup, submitted, approved, billed, returned,
-released, O&M) in the file name so Zordon can track it.
+One folder per CSI spec section under \`${CATEGORY_FOLDERS.Submittal}\`, matching the specifications folders:
+\`26 2416 - PANELBOARDS\`. Reuse an existing folder for the same section even if it's named differently
+(\`26 24 16 PANELBOARDS\`). Submittal status (submitted, returned, approved, released) is tracked in Zordon.
 
 ## File names
 
-\`<Job #>_<SHORT NAME> - <TYPE> [number] - <Description> (MM.DD.YYYY).<ext>\`
+\`<Job #>_<SHORT NAME> - <TYPE> [number] - <Description> - YYYY-MM-DD.<ext>\` (dates always YYYY-MM-DD so they sort)
 
-- \`G2707_BURB RPT - RFI 14 - Response Beam Penetration at C4 (10.03.2026).pdf\`
-- \`G2707_BURB RPT - COR 073 - Ice and Water Machine Power (10.03.2026).pdf\`
-- \`G3251_32ND ST - SUBMITTAL - Spec 26 24 16 Sub 01 - Panelboards Siemens (10.03.2026).pdf\`
+- \`G2707_BURB RPT - RFI 14 - Response Beam Penetration at C4 - 2026-10-03.pdf\`
+- \`G3251_32ND ST - SUBMITTAL - Spec 26 24 16 Sub 01 - Panelboards Siemens - 2026-10-03.pdf\`
+- Change orders and purchase orders follow the template's own naming (see the template README below).
 
 Rules: Title Case description, 3–8 words that someone would recognise months later; keep acronyms and numbers
 (kVA, MSB, 26 24 16); no \`\\ / : * ? " < > | # %\`. Never overwrite: if the name exists, add \` v2\`, \` v3\`.
@@ -109,7 +116,13 @@ Short names come from Zordon's roster (\`Zordon/zordon-roster.json\`).
 Keep the Cowork convention: \`Current/\` holds the one live version, \`Archive/\` holds dated prior versions
 (\`<name>_YYYY-MM-DD.ext\`), \`Source/\` holds scripts and .bas modules. Nothing is ever deleted; it moves to Archive.
 Finished deliverables for a job are also saved into that job's folder above with a proper name.
-${addenda.length ? `\n## House rules learned (approved by Damian)\n\n${addenda.map((a) => `- ${a.rule} _(approved ${a.approved_at})_`).join('\n')}\n` : ''}`;
+${addenda.length ? `\n## House rules learned (approved by Damian)\n\n${addenda.map((a) => `- ${a.rule} _(approved ${a.approved_at})_`).join('\n')}\n` : ''}${template.readme ? `
+## Template README (from \`${templateDir()}\`, copied as written)
+
+\`\`\`text
+${template.readme.trim()}
+\`\`\`
+` : ''}`;
 }
 
 function jobFile(job) {

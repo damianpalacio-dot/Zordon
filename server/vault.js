@@ -8,29 +8,30 @@ import { homedir } from 'node:os';
 import { isoDate } from './db.js';
 import { aiEnabled } from './intel.js';
 
-// GEC2 Job Start-Up folder template (OneDrive "_ _ JOB START_UP FOLDER").
+// GEC2 job folders. These are the defaults; the real list comes from OneDrive
+// "5. PROJECTS/0. JOB TEMPLATE - DO NOT DELETE" (see template.js), which updates these in place.
 export const JOB_TEMPLATE = [
   '01 COST CONTROL', '02 BIM', '03 CONSTRUCTION SET', '04 DESIGN CHANGES', '05 SPECIFICATIONS', '06 SCHEDULE', '07 RFIS',
-  '08 JOB SITE PHOTOS', '09 PROCUREMENT LOG', '10 CORRESPONDENCE', '11 CLOSEOUTS', '12 TEMPLATES', '13 SAFETY', '14 SUBMITTALS', '15 PREFAB',
+  '08 JOB SITE PHOTOS', '09 PROCUREMENT LOG', '10 CORRESPONDENCE', '11 CLOSEOUTS', '12 TEMPLATES', '13 SAFETY', '14 SUBMITTALS',
 ];
 
-// Document types, checked in order: [category, pattern, label used in the file name, template folder].
+// Document types, checked in order: [category, pattern, label used in the file name, default folder].
 const TYPES = [
   ['RFI', /\brfis?\b|request for information/i, 'RFI', '07 RFIS'],
-  ['COR', /change order|\bcor\b|\bpcos?\b|\bpci\b|\bco\s?#?\d|change request|\brfc\b|t&m|time and material|pricing/i, 'COR', '01 COST CONTROL'],
-  ['Pay App', /pay ?app|payment application|billing|invoice|\bsov\b|schedule of values|g70[23]|lien waiver|retention|retainage/i, 'PAY APP', '01 COST CONTROL'],
+  ['COR', /change order|\bcor\b|\bpcos?\b|\bpci\b|\bco\s?#?\d|change request|\brfc\b|t&m|time and material|pricing/i, 'CO', '01 COST CONTROL/04 CHANGE ORDERS'],
+  ['Pay App', /pay ?app|payment application|billing|invoice|\bsov\b|schedule of values|g70[23]|lien waiver|retention|retainage/i, 'PAY APP', '01 COST CONTROL/05 PAYMENT APPLICATIONS (MONTHLY BILLING)'],
   ['Submittal', /submittal|shop drawing|product data|cut sheet|\bsub[- ]?\d/i, 'SUBMITTAL', '14 SUBMITTALS'],
   ['Design Change', /bulletin|\basi\b|\bccd\b|\bdcn\b|design change|ifc set change|revision \d|addend/i, 'DESIGN CHANGE', '04 DESIGN CHANGES'],
-  ['Procurement', /purchase order|\bpo\s?#|\bmrf\b|material request|\bquote\b|quotation|release letter|delivery ticket|packing slip|\bbom\b/i, 'PROCUREMENT', '09 PROCUREMENT LOG'],
-  ['Contract', /subcontract|contract|agreement|exhibit [a-z]\b|scope of work|\bsow\b|insurance cert|\bcoi\b|bond/i, 'CONTRACT', '01 COST CONTROL'],
-  ['Proposal', /proposal|estimate|\bbid\b|takeoff|take-off/i, 'PROPOSAL', '01 COST CONTROL'],
+  ['Purchase Order', /purchase order|\bpo\s?#?\s?\d|\bquote\b|quotation|subcontract agreement/i, 'PO', '01 COST CONTROL/06 PURCHASE ORDERS'],
+  ['Procurement', /\bmrf\b|material request|release letter|delivery ticket|packing slip|\bbom\b|procurement log/i, 'PROCUREMENT', '09 PROCUREMENT LOG'],
+  ['Contract', /subcontract|contract|agreement|exhibit [a-z]\b|scope of work|\bsow\b|insurance cert|\bcoi\b|bond|\bloi\b|\bntp\b|notice to proceed|letter of intent/i, 'CONTRACT', '01 COST CONTROL/02 CONTRACT DOCUMENTS'],
+  ['Proposal', /proposal|estimate|\bbid\b|takeoff|take-off/i, 'ESTIMATE', '01 COST CONTROL/01 ORIGINAL ESTIMATE'],
   ['Schedule', /schedule|look-?ahead|gantt|\bcpm\b|milestone|\bp6\b/i, 'SCHEDULE', '06 SCHEDULE'],
   ['Specification', /specification|\bspecs?\b|section \d{2}\s?\d{2}/i, 'SPEC', '05 SPECIFICATIONS'],
   ['BIM', /\bbim\b|revit|navisworks|clash|\.(rvt|nwd|nwc|ifc)$/i, 'BIM', '02 BIM'],
   ['Drawing', /drawing|\bdwg\b|\bplans?\b|sheet [a-z]+-?\d|single.?line|\bsld\b|elevation|layout|\.(dwg|dxf)$/i, 'DWG', '03 CONSTRUCTION SET'],
   ['Closeout', /closeout|close-out|o&m|operation and maintenance|as-?built|warranty|attic stock|training/i, 'CLOSEOUT', '11 CLOSEOUTS'],
   ['Safety', /safety|\bjha\b|\bjsa\b|toolbox|incident|osha|\bppe\b|energy control|lockout/i, 'SAFETY', '13 SAFETY'],
-  ['Prefab', /prefab|pre-fab|assembly drawing|kitting/i, 'PREFAB', '15 PREFAB'],
   ['Photo', /\.(jpe?g|png|heic|webp)$|photo|picture/i, 'PHOTO', '08 JOB SITE PHOTOS'],
   ['Inspection', /inspection|permit|test report|\bneta\b|punch ?list|certificate/i, 'INSPECTION', '10 CORRESPONDENCE'],
   ['Meeting Minutes', /minutes|meeting notes|\boac\b|agenda/i, 'MINUTES', '10 CORRESPONDENCE'],
@@ -80,7 +81,9 @@ export function projectFolder(project) {
   if (!project) return UNFILED;
   // A job whose folder isn't named after its number (e.g. "5. PROJECTS/LAUSD 32ND ST").
   if (project.folder) return String(project.folder).replace(/^\/+|\/+$/g, '');
-  const job = cleanName(project.code || project.name || `Project ${project.id}`, 40);
+  const job = isJobNumber(project.code) && project.name && !/name not found/i.test(project.name)
+    ? cleanName(`${project.code.toUpperCase()} - ${titleCase(project.name)}`, 90)
+    : cleanName(project.code || project.name || `Project ${project.id}`, 40);
   return projectsDir() ? `${projectsDir()}/${job}` : job;
 }
 
@@ -112,7 +115,7 @@ export async function findJobFolder(root, project) {
   for (const [rank, place] of places.entries()) {
     const entries = await readdir(vaultPath(root, place || '.'), { withFileTypes: true }).catch(() => []);
     for (const e of entries) {
-      if (!e.isDirectory() || e.name.startsWith('.') || e.name === CONTROL_DIR) continue;
+      if (!e.isDirectory() || e.name.startsWith('.') || e.name === CONTROL_DIR || /JOB TEMPLATE/i.test(e.name)) continue;
       const score = folderScore(e.name, project) - rank; // prefer the projects folder on ties
       if (score > 0 && (!best || score > best.score)) best = { score, path: place ? `${place}/${e.name}` : e.name };
     }
@@ -126,9 +129,10 @@ const GENERIC = new Set(['GEC2', 'ELECTRICAL', 'ELEC', 'SUB', 'SUBMITTAL', 'SUBM
   'PDF', 'REV', 'REVISION', 'COPY', 'FINAL', 'DRAFT', 'NEW', 'OLD', 'FILES', 'DOCS', 'DOCUMENTS', 'MISC', 'GENERAL', 'LEVEL', 'SET']);
 const specKeys = (t) => [...String(t).matchAll(/\b(\d{2})\s?(\d{2})\s?(\d{2})\b/g)].map((m) => m.slice(1).join(''));
 
+const stem = (w) => (w.length > 4 ? w.replace(/(IES|ES|S)$/, (m) => (m === 'IES' ? 'Y' : '')) : w);
 export function subfolderScore(folderName, hay) {
-  const ht = new Set(tokens(hay));
-  const strong = tokens(folderName).filter((w) => !GENERIC.has(w) && (w.length >= 4 || /^[A-Z]{3}$/.test(w)) && ht.has(w));
+  const ht = new Set(tokens(hay).map(stem));
+  const strong = tokens(folderName).filter((w) => !GENERIC.has(w) && (w.length >= 3) && ht.has(stem(w)));
   const specs = specKeys(folderName).filter((k) => specKeys(hay).includes(k));
   return strong.length + specs.length * 3;
 }
@@ -189,7 +193,7 @@ export function describe(title, category, project) {
   const typeWords = [TYPE_LABEL[category], category, ...(category === 'COR' ? ['PCO', 'PCI', 'CO', 'Change Order'] : []), ...(category === 'Submittal' ? ['Sub'] : [])];
   t = t.replace(new RegExp(`^(${typeWords.map(escapeRe).join('|')})\\b[\\s:#-]*`, 'i'), '');
   let number = '';
-  const m = t.match(/^#?\s*(\d[\w.]*(?:-\d[\w.]*)?)\b[\s:-]*/);
+  const m = t.match(/^#?\s*(\d{2} \d{2} ?\d{2}\b|\d[\w.]*(?:-\d[\w.]*)?)\b[\s:-]*/); // a spec section ("28 31 00") stays whole
   if (m) { number = m[1]; t = t.slice(m[0].length); }
   t = t.replace(/\s+[-–—]\s+[-–—]\s+/g, ' - ').replace(/^[\s\-–—_:]+|[\s\-–—_:]+$/g, '');
   return { number, desc: titleCase(t) };
@@ -199,7 +203,7 @@ export function finalize({ title, category, project, ext, today }) {
   const { number, desc: d } = describe(title, category, project);
   const label = `${TYPE_LABEL[category] || 'DOC'}${number ? ` ${number}` : ''}`;
   const desc = d || titleCase(category);
-  const date = usDate(today);
+  const date = today; // YYYY-MM-DD so files sort correctly (GEC2 job template rule)
   const prefix = project ? `${cleanName(project.code || project.name, 40)}${shortName(project) ? `_${shortName(project)}` : ''} - ` : '';
   const sub = CATEGORY_FOLDERS[category] || '';
   const folder = project ? [projectFolder(project), sub].filter(Boolean).join('/') : UNFILED;
@@ -208,7 +212,7 @@ export function finalize({ title, category, project, ext, today }) {
     category,
     project_id: project?.id ?? null,
     folder,
-    filename: `${prefix}${label} - ${desc} (${date})${ext || ''}`,
+    filename: `${prefix}${label} - ${desc} - ${date}${ext || ''}`,
   };
 }
 

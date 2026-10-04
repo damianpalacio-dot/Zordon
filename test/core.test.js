@@ -183,16 +183,16 @@ test('file names follow the convention', () => {
   assert.equal(s.folder, 'Zordon/_Unfiled');
   const rfi = name({ filename: 'IMG_1234.pdf', hint: 'RFI 14 response beam penetration at C4 G2707' });
   assert.equal(rfi.project_id, 1);
-  assert.equal(rfi.folder, '5. PROJECTS/G2707/07 RFIS');
-  assert.equal(rfi.filename, 'G2707_BURB RPT - RFI 14 - Response Beam Penetration at C4 (10.03.2026).pdf');
-  assert.equal(name({ filename: 'COR 073 CA#291-5777.pdf', project_id: 1 }).filename, 'G2707_BURB RPT - COR 073 - CA 291-5777 (10.03.2026).pdf');
+  assert.equal(rfi.folder, '5. PROJECTS/G2707 - Burbank Airport SWA Terminal/07 RFIS'); // new jobs: "<Job #> - <Description>"
+  assert.equal(rfi.filename, 'G2707_BURB RPT - RFI 14 - Response Beam Penetration at C4 - 2026-10-03.pdf');
+  assert.equal(name({ filename: 'COR 073 CA#291-5777.pdf', project_id: 1 }).filename, 'G2707_BURB RPT - CO 073 - CA 291-5777 - 2026-10-03.pdf');
   const sub = name({ filename: 'G3251 - 32nd St - Spec 26 2416 Sub 01 - Panelboards Siemens.pdf' });
-  assert.equal(sub.folder, '5. PROJECTS/G3251/14 SUBMITTALS');
+  assert.equal(sub.folder, '5. PROJECTS/G3251 - 32nd St USC Magnet/14 SUBMITTALS');
   projects[1].folder = '5. PROJECTS/LAUSD 32ND ST'; // jobs whose folder isn't named by number
   assert.equal(name({ filename: 'x.pdf', hint: 'RFI 9 conduit', project_id: 2 }).folder, '5. PROJECTS/LAUSD 32ND ST/07 RFIS');
   delete projects[1].folder;
-  assert.equal(sub.filename, 'G3251_32ND ST - SUBMITTAL - Spec 26 2416 Sub 01 - Panelboards Siemens (10.03.2026).pdf');
-  assert.equal(name({ filename: 'x.pdf', hint: 'Pay app 6 backup', project_id: 2 }).folder, '5. PROJECTS/G3251/01 COST CONTROL');
+  assert.equal(sub.filename, 'G3251_32ND ST - SUBMITTAL - Spec 26 2416 Sub 01 - Panelboards Siemens - 2026-10-03.pdf');
+  assert.equal(name({ filename: 'x.pdf', hint: 'Pay app 6 backup', project_id: 2 }).folder, '5. PROJECTS/G3251 - 32nd St USC Magnet/01 COST CONTROL/05 PAYMENT APPLICATIONS (MONTHLY BILLING)');
   assert.equal(slug('Pay app #6 — backup (final)'), 'Pay-App-6-Backup-Final');
 });
 
@@ -209,7 +209,7 @@ test('_Inbox files are renamed and filed', async () => {
   assert.equal(filed.length, 1);
   const doc = db.prepare('SELECT * FROM documents WHERE id = ?').get(filed[0].id);
   assert.equal(doc.category, 'COR');
-  assert.match(doc.path, /^5\. PROJECTS\/AGM-101\/01 COST CONTROL\/CHANGE ORDERS\/COR 007 - Pricing for Added Outlets\/AGM-101_ANGEL GROVE MEDICAL - COR 7 - Pricing for Added Outlets \(10\.03\.2026\)\.txt$/);
+  assert.equal(doc.path, '5. PROJECTS/AGM-101/01 COST CONTROL/04 CHANGE ORDERS/1 PENDING (not yet submitted to GC)/CO 07 - Added Outlets/01 PRICING - BACKUP/CO 07 - Pricing for Added Outlets.txt');
   assert.deepEqual(await readdir(join(root, 'Zordon', '_Inbox')), []);
 });
 
