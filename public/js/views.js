@@ -185,6 +185,13 @@ async function doccontrol(el, params, { render }) {
     toast(res.task_id ? `Moved to ${n.value} — next step added to your list` : `Moved to ${n.value}`);
     render();
   }));
+  wire(el, '[data-compile]', 'click', (_e, n) => guard(async () => {
+    n.disabled = true;
+    const r = await api(`/api/packages/${n.dataset.compile}/compile`, { method: 'POST', body: {} });
+    toast(`Package built: ${r.pages} pages from ${r.included.length} file(s)${r.skipped.length ? ` · ${r.skipped.length} skipped (not PDF)` : ''}`);
+    render();
+  }));
+  wire(el, '[data-open]', 'click', (_e, n) => guard(() => api('/api/onedrive/open', { method: 'POST', body: { path: n.dataset.open } })));
   el.querySelector('#new-pkg').addEventListener('submit', (e) => {
     e.preventDefault();
     const body = formData(e.target);
@@ -209,6 +216,8 @@ function packagesPanel({ packages, stages }) {
         <span class="pill">${type === 'cor' ? `CO ${esc(p.number)}` : esc(p.spec_section)}</span>
         <div class="grow"><div class="title">${esc(p.title)}${p.amount ? ` <span class="mono" style="color:var(--gold)">$${Number(p.amount).toLocaleString()}</span>` : ''}</div>
           <div class="small dim mono">${esc(p.project_code || p.project_name || '')} · ${esc(p.folder || '')}</div></div>
+        ${type === 'cor' ? `<button class="btn sm" data-compile="${p.id}" title="Merge the CO form, pricing/backup, estimate, RFP/RFI reference and T&M tags into one PDF for the GC">📎 ${p.compiled_at ? 'Rebuild' : 'Build'} GC package</button>
+          ${p.package_path ? `<button class="btn sm gold" data-open="${esc(p.package_path)}">📄 Open</button>` : ''}` : ''}
         <select data-stage="${p.id}">${stages[type].map((s) => `<option ${s.name === p.stage ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>
       </div>`).join('') || '<div class="empty">None open. File a document with its number, or start one below.</div>'}</div></section>`;
   };

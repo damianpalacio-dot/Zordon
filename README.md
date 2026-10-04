@@ -112,6 +112,13 @@ GC also carries the job number). When a document shows the CO was submitted, app
 whole CO folder to that status folder and adds the next steps: follow up with the GC, update the Job Control Workbook,
 bill it on the next pay app.
 
+**CO package for the GC:** when the Job Control Workbook's CO PDF lands in `Zordon/_Inbox` (Claude copies it there
+when you say "send CO 001 to Zordon"), Zordon creates `CO 001 - <description>` (the description is what follows
+"CO 001" in the file name, without the job number and name), puts the form in it, and builds
+`CO 001 - G3249 - <description>.pdf`: a contents page, the CO form, pricing/backup, any estimate folder, RFP/RFI
+reference and T&M tags, merged into one PDF. Backup filed later rebuilds it; **📎 Build GC package** on RFIs &
+Submittals rebuilds it by hand. Non-PDF files (Excel, Word) are listed as skipped; save them as PDF to include them.
+
 **Submittals** get one folder per spec section (`14 SUBMITTALS/26 2416 - PANELBOARDS`); their status (submitted,
 returned, approved, released) is tracked on RFIs & Submittals.
 
@@ -194,7 +201,7 @@ Zordon is built to run on your own computer. Before you put it on a server or op
 
 ```bash
 npm run dev    # restart on file changes
-npm test       # 50 tests: parsing, scheduling, doc control, naming, packages, archive, API
+npm test       # 52 tests: parsing, scheduling, doc control, naming, packages, archive, API
 ```
 
 - `server/`: zero-framework Node HTTP server. SQLite via Node's built-in `node:sqlite` (`data/zordon.db`).

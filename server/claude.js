@@ -81,15 +81,19 @@ Unknown job? Save to \`Zordon/_Unfiled\` and say so.
 
 ## Change orders
 
-\`${co.base}/<status>/CO 03 - <short description>/\`
+\`${co.base}/<status>/CO 001 - <short description>/\`
 - Status folders: ${co.stages.map((x) => `\`${x.name}\``).join(', ')}. A CO folder lives in its status folder and the
   whole folder moves when the status changes (Zordon moves it when it sees the CO submitted, approved or rejected).
 - New CO: ${co.folderTemplate ? `duplicate \`${co.folderTemplate.split('/').pop()}\` into the first status folder` : 'create the folder in the first status folder'}
-  and rename it \`CO 0X - description\`. Numbers go in order per job and are never reused; a GC number goes in
-  parentheses: \`CO 03 (GC PCO-012) - Additional Lighting Circuits\`.
+  and rename it \`CO 001 - description\` (three digits). Numbers go in order per job and are never reused; a GC number goes
+  in parentheses: \`CO 003 (GC PCO-012) - Additional Lighting Circuits\`.
 - Inside: ${co.subfolders.map((x) => `\`${x}\``).join(', ')}.
-- Files inside carry the CO number (\`CO 03 - T&M Tag - 2026-10-04.pdf\`); the proposal sent to the GC also carries the
-  job number (\`CO 03 - G3249 - Additional Lighting Circuits.pdf\`).
+- Files inside carry the CO number (\`CO 003 - T&M Tag - 2026-10-04.pdf\`).
+- **The CO form from the Job Control Workbook:** when Damian makes the CO PDF, copy it unchanged into \`Zordon/_Inbox\`.
+  Zordon creates (or finds) \`CO 001 - <description>\` (the description is whatever follows "CO 001" in the file name,
+  so the job number and job name drop off), puts the form at the top of the CO folder, and builds the package for the
+  GC: \`CO 001 - G3249 - <description>.pdf\` = contents page + CO form + pricing/backup + estimate + RFP/RFI reference
+  + T&M tags. Backup filed later rebuilds it. Save backup as PDF (or JPG/PNG) so it can be included.
 - When a CO is approved or rejected, Zordon adds a task to update the job's GEC2_Job_Control_Workbook.xlsm (the source
   of truth for COs, submittals and billing) and, once approved, to bill it.
 

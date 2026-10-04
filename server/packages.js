@@ -68,8 +68,8 @@ const NEXT_STEP = {
 
 export const packageType = (category) => (category === 'COR' ? 'cor' : category === 'Submittal' ? 'submittal' : null);
 
-// "CO 03": numbered per job, at least two digits, never renumbered.
-export const corNumber = (n) => (/^\d+$/.test(String(n)) ? String(Number(n)).padStart(2, '0') : cleanName(n, 20).toUpperCase());
+// "CO 001": numbered per job, three digits, never renumbered.
+export const corNumber = (n) => (/^\d+$/.test(String(n)) ? String(Number(n)).padStart(3, '0') : cleanName(n, 20).toUpperCase());
 export const coLabel = (n) => `CO ${corNumber(n)}`;
 // Spec sections are compared by their six digits ("26 24 16" = "262416" = "26 2416").
 export const specKey = (t) => String(t || '').match(/\b(\d{2})\s?(\d{2})\s?(\d{2})\b/)?.slice(1).join(' ') || null;
@@ -164,7 +164,10 @@ export function listPackages(db, { type, project_id, open } = {}) {
   if (type) rows = rows.filter((r) => r.type === type);
   if (project_id) rows = rows.filter((r) => r.project_id === Number(project_id));
   if (open) rows = rows.filter((r) => !FINAL_STAGES[r.type].includes(r.stage));
-  return rows.map((r) => ({ ...r, history: JSON.parse(r.history || '[]'), stages: keysFor(r.type) }));
+  return rows.map((r) => ({
+    ...r, history: JSON.parse(r.history || '[]'), stages: keysFor(r.type),
+    package_path: r.type === 'cor' && r.compiled_at ? `${r.folder}/${coLabel(r.number)}${r.project_code ? ` - ${r.project_code}` : ''} - ${r.title}.pdf` : null,
+  }));
 }
 
 export function findPackage(db, project_id, type, { number, spec_section }) {

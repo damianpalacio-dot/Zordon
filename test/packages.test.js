@@ -92,11 +92,11 @@ test('stages come from the words in the document', () => {
 
 test('existing folders with older names are reused', () => {
   assert.ok(packageMatches('cor', 'Change Request 073', { number: '73' }));
-  assert.ok(packageMatches('cor', 'CO 03 (GC PCO-012) - Lighting', { number: '3' }));
+  assert.ok(packageMatches('cor', 'CO 003 (GC PCO-012) - Lighting', { number: '3' }));
   assert.ok(packageMatches('cor', 'COR 073 Ice machine', { number: '073' }));
   assert.ok(!packageMatches('cor', 'Change Request 074', { number: '73' }));
   assert.ok(packageMatches('submittal', '262416 PANELBOARDS', { spec_section: '26 24 16' }));
-  assert.equal(packageName('cor', { number: '3', title: 'additional lighting circuits' }), 'CO 03 - Additional Lighting Circuits');
+  assert.equal(packageName('cor', { number: '3', title: 'additional lighting circuits' }), 'CO 003 - Additional Lighting Circuits');
   assert.equal(packageName('submittal', { spec_section: '26 24 16', title: 'panelboards' }), '26 2416 - PANELBOARDS');
 });
 
@@ -104,7 +104,7 @@ test('a new CO is a copy of the template CO folder in PENDING; an old-style fold
   const root = await oneDrive();
   const job = '5. PROJECTS/G2707';
   const fresh = await ensurePackage(root, job, 'cor', { number: '3', title: 'Additional lighting circuits' });
-  assert.equal(fresh.folder, `${job}/01 COST CONTROL/04 CHANGE ORDERS/1 PENDING (not yet submitted to GC)/CO 03 - Additional Lighting Circuits`);
+  assert.equal(fresh.folder, `${job}/01 COST CONTROL/04 CHANGE ORDERS/1 PENDING (not yet submitted to GC)/CO 003 - Additional Lighting Circuits`);
   assert.equal(fresh.stage, 'PENDING');
   assert.deepEqual((await readdir(join(root, fresh.folder))).sort(), ['01 PRICING - BACKUP', '02 RFP-RFI REFERENCE', '03 T&M TAGS', '04 APPROVED CO DOCUMENTATION']);
   await mkdir(join(root, job, '01 COST CONTROL/CHANGE ORDERS/Change Request 073'), { recursive: true });
@@ -115,30 +115,30 @@ test('a new CO is a copy of the template CO folder in PENDING; an old-style fold
 test('filing CO documents: right subfolder, CO number names, and the folder moves with its status', async () => {
   const db = freshDb();
   const root = await oneDrive();
-  const pending = '5. PROJECTS/G2707/01 COST CONTROL/04 CHANGE ORDERS/1 PENDING (not yet submitted to GC)/CO 03 - Additional Lighting Circuits';
+  const pending = '5. PROJECTS/G2707/01 COST CONTROL/04 CHANGE ORDERS/1 PENDING (not yet submitted to GC)/CO 003 - Additional Lighting Circuits';
   const a = await fileDocument(db, root, { buffer: Buffer.from('x'), filename: 'quote.pdf', project_id: 1, hint: 'CO 3 additional lighting circuits Graybar quote' }, TODAY);
-  assert.equal(db.prepare('SELECT path FROM documents WHERE id = ?').get(a.id).path, `${pending}/01 PRICING - BACKUP/CO 03 - Additional Lighting Circuits Graybar Quote.pdf`);
+  assert.equal(db.prepare('SELECT path FROM documents WHERE id = ?').get(a.id).path, `${pending}/01 PRICING - BACKUP/CO 003 - Additional Lighting Circuits Graybar Quote.pdf`);
   const t = await fileDocument(db, root, { buffer: Buffer.from('x'), filename: 'tag.pdf', project_id: 1, hint: 'CO 3 additional lighting circuits T&M tag' }, TODAY);
-  assert.match(db.prepare('SELECT path FROM documents WHERE id = ?').get(t.id).path, /\/03 T&M TAGS\/CO 03 - .* - 2026-10-03\.pdf$/);
+  assert.match(db.prepare('SELECT path FROM documents WHERE id = ?').get(t.id).path, /\/03 T&M TAGS\/CO 003 - .* - 2026-10-03\.pdf$/);
 
   // Sent to the GC: the whole CO folder moves to SUBMITTED, the proposal carries the job number, and a follow-up appears.
   const p = await fileDocument(db, root, { buffer: Buffer.from('x'), filename: 'co.pdf', project_id: 1, hint: 'CO 3 additional lighting circuits proposal submitted to GC' }, TODAY);
   const submitted = pending.replace('1 PENDING (not yet submitted to GC)', '2 SUBMITTED (awaiting GC-owner approval)');
-  assert.match(db.prepare('SELECT path FROM documents WHERE id = ?').get(p.id).path, new RegExp(`^${submitted.replace(/[()]/g, '\\$&')}/01 PRICING - BACKUP/CO 03 - G2707 - `));
+  assert.match(db.prepare('SELECT path FROM documents WHERE id = ?').get(p.id).path, new RegExp(`^${submitted.replace(/[()]/g, '\\$&')}/01 PRICING - BACKUP/CO 003 - G2707 - `));
   assert.deepEqual(await readdir(join(root, submitted, '01 PRICING - BACKUP')).then((x) => x.length), 2);
   let [pkg] = listPackages(db);
   assert.equal(pkg.stage, 'SUBMITTED');
   assert.equal(pkg.folder, submitted);
-  assert.ok(db.prepare("SELECT 1 FROM tasks WHERE source = 'package' AND status != 'done' AND title LIKE 'Follow up with the GC for approval of CO 03%'").get());
+  assert.ok(db.prepare("SELECT 1 FROM tasks WHERE source = 'package' AND status != 'done' AND title LIKE 'Follow up with the GC for approval of CO 003%'").get());
 
   // Approved: moves to APPROVED, asks for the workbook update and the billing.
   const addTask = (x) => Number(db.prepare('INSERT INTO tasks (project_id, title, owner_id, priority, due_date, source, source_ref) VALUES (?, ?, ?, ?, ?, ?, ?)')
     .run(x.project_id, x.title, x.owner_id, x.priority, x.due_date, x.source, x.source_ref).lastInsertRowid);
   await setStage(db, pkg.id, 'APPROVED', { today: TODAY, me: 1, addTask, root, force: true });
   [pkg] = listPackages(db);
-  assert.match(pkg.folder, /\/3 APPROVED\/CO 03 - /);
+  assert.match(pkg.folder, /\/3 APPROVED\/CO 003 - /);
   const open = db.prepare("SELECT title, priority FROM tasks WHERE source = 'package' AND status != 'done' ORDER BY id").all();
-  assert.deepEqual(open.map((x) => x.title.split(' CO 03')[0]), ['Update Job Control Workbook for approved', 'Bill on the next pay app:']);
+  assert.deepEqual(open.map((x) => x.title.split(' CO 003')[0]), ['Update Job Control Workbook for approved', 'Bill on the next pay app:']);
 });
 
 test('a submittal with a spec section goes in its spec folder', async () => {
@@ -244,4 +244,38 @@ test('Procore/Autodesk items can be mapped by job number', async () => {
   const db = freshDb();
   upsertItems(db, [{ origin: 'procore', external_id: '77', type: 'rfi', number: '12', title: 'Conduit routing', project_id: 'G2707' }], TODAY);
   assert.equal(db.prepare("SELECT project_id FROM tracked_items WHERE external_id = '77'").get().project_id, 1);
+});
+
+test('a CO form PDF from the workbook creates "CO 001 - description" and compiles the package for the GC', async () => {
+  const { PDFDocument } = await import('pdf-lib');
+  const pdf = async (pages) => { const d = await PDFDocument.create(); for (let i = 0; i < pages; i++) d.addPage([612, 792]); return Buffer.from(await d.save()); };
+  const db = freshDb();
+  const root = await oneDrive();
+  const { compilePackage } = await import('../server/index.js');
+
+  // Backup already sitting in the CO folder (filed earlier by Damian or Claude).
+  const q = await fileDocument(db, root, { buffer: await pdf(2), filename: 'graybar quote.pdf', project_id: 1, hint: 'CO 1 additional lighting circuits Graybar quote' }, TODAY);
+  const tm = await fileDocument(db, root, { buffer: await pdf(1), filename: 'tag.pdf', project_id: 1, hint: 'CO 1 additional lighting circuits T&M tag' }, TODAY);
+  assert.equal(q.compiled, null);
+
+  // The workbook's PDF arrives in the _Inbox: job number and job name drop out of the folder name.
+  const form = await fileDocument(db, root, { buffer: await pdf(1), filename: 'G2707 - Burbank Replacement Terminal - CO 001 - Additional Lighting Circuits.pdf' }, TODAY);
+  const folder = '5. PROJECTS/G2707/01 COST CONTROL/04 CHANGE ORDERS/1 PENDING (not yet submitted to GC)/CO 001 - Additional Lighting Circuits';
+  assert.equal(db.prepare('SELECT path FROM documents WHERE id = ?').get(form.id).path, `${folder}/CO 001 - Additional Lighting Circuits.pdf`);
+  assert.ok(db.prepare('SELECT path FROM documents WHERE id = ?').get(q.id).path.startsWith(`${folder}/01 PRICING - BACKUP/`));
+  assert.ok(db.prepare('SELECT path FROM documents WHERE id = ?').get(tm.id).path.startsWith(`${folder}/03 T&M TAGS/`));
+
+  // Contents page + form (1) + quote (2) + T&M tag (1); a spreadsheet is listed as skipped, not lost.
+  assert.equal(form.compiled.path, `${folder}/CO 001 - G2707 - Additional Lighting Circuits.pdf`);
+  assert.equal(form.compiled.pages, 5);
+  assert.deepEqual(form.compiled.included.map((i) => i.section), ['Change order', 'Pricing & backup', 'T&M tags']);
+  const built = await PDFDocument.load(await (await import('node:fs/promises')).readFile(join(root, form.compiled.path)));
+  assert.equal(built.getPageCount(), 5);
+  assert.ok(db.prepare("SELECT 1 FROM tasks WHERE title LIKE 'Review and send CO 001 package to the GC%'").get());
+
+  await writeFile(join(root, folder, '01 PRICING - BACKUP', 'labor.xlsx'), 'x');
+  const again = await compilePackage(db, root, listPackages(db)[0].id, TODAY);
+  assert.equal(again.pages, 5);
+  assert.match(again.skipped[0].file, /labor\.xlsx$/);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE title LIKE 'Review and send CO 001%'").get().n, 1, 'one review task, not one per rebuild');
 });

@@ -17,11 +17,12 @@ import { scanOld, applyPlan, listArchiveLogs, undoArchive } from './cleanup.js';
 import { oneDriveStatus, listFolder, openOnComputer } from './onedrive.js';
 import { STAGES, packageType, stageFor, ensurePackage, coSubfolder, coLabel, specKey, recordPackage, setStage, listPackages } from './packages.js';
 import { template, loadTemplate, copyTemplate, templateDir } from './template.js';
+import { compileCo } from './compile.js';
 import { leadTime, createElectricalPlan, LEAD_TIMES } from './electrical.js';
 import { loadBuiltinSkills, listSkills, saveSkill, createJob, listJobs, syncControl, importJobResult, filingRules,
   importProposal, decideProposal, listProposals } from './claude.js';
 import { CATEGORY_NAMES, CATEGORY_FOLDERS, suggestName, finalize, textSnippet, uniquePath, saveFile, moveFile, deleteFile, vaultPath,
-  ensureProjectFolders, inboxFiles, readVaultFile, projectFolder, isJobNumber, JOB_TEMPLATE, CONTROL_DIR, INBOX, findJobFolder, refineFolder, detectVault, cleanName } from './vault.js';
+  ensureProjectFolders, inboxFiles, readVaultFile, projectFolder, isJobNumber, JOB_TEMPLATE, CONTROL_DIR, INBOX, findJobFolder, refineFolder, detectVault, cleanName, titleCase } from './vault.js';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const STATIC_DIRS = {
@@ -162,7 +163,7 @@ export async function fileDocument(db, vaultRoot, { buffer, fromRel, filename, p
   let pkg = null;
   if (project) {
     const full = db.prepare('SELECT * FROM projects WHERE id = ?').get(project.id);
-    pkg = await packageFor(db, vaultRoot, full, chosen, hay, today);
+    pkg = await packageFor(db, vaultRoot, full, { ...chosen, original: filename }, hay, today);
     if (pkg) {
       chosen.folder = pkg.folder;
       if (pkg.filename) chosen.filename = `${pkg.filename}${extname(chosen.filename)}`;
@@ -174,7 +175,29 @@ export async function fileDocument(db, vaultRoot, { buffer, fromRel, filename, p
   const id = db.prepare(`INSERT INTO documents (project_id, task_id, title, category, original_name, path, size, mime, notes)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(chosen.project_id, task_id ? Number(task_id) : null, chosen.title, chosen.category,
     filename, rel, content.length, mime || null, notes || null).lastInsertRowid;
-  return { id: Number(id), analyzer: suggestion.analyzer };
+  // A new CO form builds the GC package; new backup for a CO that already has a package rebuilds it.
+  let compiled = null;
+  if (pkg?.id && (pkg.compile || db.prepare('SELECT compiled_at FROM packages WHERE id = ?').get(pkg.id)?.compiled_at)) {
+    compiled = await compilePackage(db, vaultRoot, pkg.id, today).catch((err) => { console.warn(`[co] package: ${err.message}`); return null; });
+  }
+  return { id: Number(id), analyzer: suggestion.analyzer, compiled };
+}
+
+// Build (or rebuild) a change order's package for the GC: CO form + pricing/backup + estimate + RFP/RFI + T&M tags.
+export async function compilePackage(db, vaultRoot, packageId, today = isoDate()) {
+  const pkg = mustExist(db.prepare('SELECT * FROM packages WHERE id = ?').get(Number(packageId)), 'Change order');
+  if (pkg.type !== 'cor') throw new HttpError(400, 'Only change orders are compiled');
+  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(pkg.project_id);
+  const first = !pkg.compiled_at;
+  const result = await compileCo(vaultRoot, pkg.folder, { label: coLabel(pkg.number), jobCode: project?.code, jobName: project?.name, desc: pkg.title, today });
+  db.prepare('UPDATE packages SET compiled_at = ? WHERE id = ?').run(new Date().toISOString(), pkg.id);
+  if (first) {
+    createTask(db, { project_id: pkg.project_id, owner_id: mePersonId(db), title: `Review and send ${coLabel(pkg.number)} package to the GC - ${pkg.title}`,
+      description: `Package: ${result.path}\n${result.included.length} file(s), ${result.pages} pages${result.skipped.length ? `\nNot included: ${result.skipped.map((x) => x.file.split('/').pop()).join(', ')}` : ''}`,
+      priority: 'high', due_date: addDays(today, 1), status: 'not_started', source: 'package', source_ref: pkg.id });
+  }
+  console.log(`[co] ${coLabel(pkg.number)} package: ${result.pages} pages from ${result.included.length} file(s)${result.skipped.length ? `, ${result.skipped.length} skipped` : ''}`);
+  return result;
 }
 
 // A CO with a number, or a submittal with a spec section, goes into its own folder as the job template lays out:
@@ -184,12 +207,24 @@ export async function fileDocument(db, vaultRoot, { buffer, fromRel, filename, p
 async function packageFor(db, vaultRoot, project, chosen, hay, today) {
   const type = packageType(chosen.category);
   if (!type) return null;
-  const desc = chosen.title.replace(/^[A-Z ]+?(\s(?:\d{2} \d{2} ?\d{2}|[\w.-]*\d[\w.-]*))?\s-\s/, '');
-  const number = type === 'cor' ? chosen.title.match(/^CO (\d+)\b/)?.[1] : null;
+  let desc = chosen.title.replace(/^[A-Z ]+?(\s(?:\d{2} \d{2} ?\d{2}|[\w.-]*\d[\w.-]*))?\s-\s/, '');
+  let number = type === 'cor' ? chosen.title.match(/^CO (\d+)\b/)?.[1] : null;
+  // A CO form PDF ("G3249 - Burbank SWA Cargo - CO 001 - Additional Lighting Circuits.pdf"): the number and the
+  // description come from the file name, after "CO ###", which drops the job number and job name.
+  const base = String(chosen.original || '').replace(/\.[^.]+$/, '');
+  const coInName = base.match(/\b(?:CO|COR|PCO|CHANGE ORDER)\s*[#-]?\s*0*(\d{1,4})\b\s*(?:\([^)]*\))?\s*[-–:_]*\s*(.*)$/i);
+  const isCoForm = type === 'cor' && /\.pdf$/i.test(chosen.original || '') && Boolean(coInName)
+    && !/t\s?&\s?m|\btags?\b|ticket|quote|quotation|backup|back-up|\brfi\b|\brfp\b|bulletin|\basi\b|\bccd\b|directive|reference|approved|executed|fully signed|rejected|\bvoid\b|estimate|takeoff|photo/i.test(hay);
+  if (isCoForm) {
+    number = coInName[1];
+    const rest = titleCase(cleanName(coInName[2].replace(/\(?\d{1,2}[.-]\d{1,2}[.-]\d{2,4}\)?|\d{4}-\d{2}-\d{2}/g, '').replace(/[_]+/g, ' '), 120)
+      .replace(/^[\s\-–:]+|[\s\-–:]+$/g, ''));
+    if (rest) desc = rest;
+  }
   const spec_section = type === 'submittal' ? specKey(hay) : null;
   if (type === 'cor' ? !number : !spec_section) return null;
   // The CO / submittal folder is named for the change or the equipment, not for this particular document.
-  const folderTitle = desc.replace(/^\d{2}(\s?\d{2}){0,2}\s*-?\s*/, '')
+  const folderTitle = isCoForm ? desc : desc.replace(/^\d{2}(\s?\d{2}){0,2}\s*-?\s*/, '')
     .replace(/\b(graybar|ced|quotes?|quotation|pricing|backup|back-up|t\s?&\s?m|tags?|tickets?|proposal|cover letter|submitted|sent to (the )?gc|approved|fully signed|signed|executed|rejected|void|product data|cut ?sheets?|shop drawings?|no exceptions taken|revise and resubmit|returned|transmittal)\b/gi, ' ')
     .replace(/\s+/g, ' ').trim().replace(/^(for|of|the|and|to|on|re)\b\s*/i, '') || desc;
   const found = await ensurePackage(vaultRoot, projectFolder(project), type, { number, spec_section, title: folderTitle });
@@ -199,6 +234,9 @@ async function packageFor(db, vaultRoot, project, chosen, hay, today) {
     rec = (await setStage(db, rec.id, docStage, { today, me: mePersonId(db), addTask: (t) => createTask(db, t), root: vaultRoot })).package;
   }
   if (type !== 'cor') return { id: rec.id, folder: rec.folder };
+  // The CO form itself (the PDF made from the Job Control Workbook) sits at the top of the CO folder and
+  // triggers the package for the GC; everything else goes in a backup subfolder.
+  if (isCoForm) return { id: rec.id, folder: rec.folder, filename: cleanName(`${coLabel(number)} - ${rec.title}`, 150), compile: true };
   const sub = await coSubfolder(vaultRoot, rec.folder, hay);
   // Files in a CO folder carry the CO number; the proposal that goes to the GC also carries the job number.
   const proposal = /proposal|cover letter|submitted|sent to (the )?gc/i.test(hay);
@@ -714,6 +752,7 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
       return setStage(db, Number(params.id), body.stage ?? mustExist(db.prepare('SELECT stage FROM packages WHERE id = ?').get(Number(params.id)), 'Package').stage,
         { force: true, today: today(), me: mePersonId(db), addTask: (t) => createTask(db, t), root: vaultRoot });
     }],
+    ['POST', '/api/packages/:id/compile', ({ params }) => compilePackage(db, vaultRoot, params.id, today())],
     ['DELETE', '/api/packages/:id', ({ params }) => {
       db.prepare('DELETE FROM packages WHERE id = ?').run(Number(params.id));
       return { deleted: true, note: 'Stopped tracking. The folder and its files were left in place.' };

@@ -234,6 +234,7 @@ const ADDED_COLUMNS = {
   tasks: { estimate_hours: 'REAL' },
   routines: { day_of_month: 'INTEGER' },
   emails: { message_id: 'TEXT' },
+  packages: { compiled_at: 'TEXT' },
 };
 
 function migrate(db) {

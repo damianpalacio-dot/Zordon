@@ -1,6 +1,6 @@
 ---
 name: zordon-link
-description: Damian's link to Zordon, his project command center. Use whenever he asks to run his Zordon jobs, to save or file anything for a GEC2 job (RFIs, submittals, CORs, pay apps, drawings, specs, proposals, photos), to use one of his team skills (panel schedules, contract review, drawing overlays, spec review, or any skill in Zordon/skills), or when he shows you a new way he wants something done.
+description: Damian's link to Zordon, his project command center. Use whenever he asks to run his Zordon jobs, to send a change order (CO) PDF from his Job Control Workbook to Zordon, to save or file anything for a GEC2 job (RFIs, submittals, change orders, pay apps, drawings, specs, proposals, photos), to use one of his team skills (panel schedules, contract review, drawing overlays, spec review, or any skill in Zordon/skills), or when he shows you a new way he wants something done.
 metadata:
   title: Zordon Link (Cowork bridge)
 ---
@@ -16,7 +16,7 @@ Zordon is Damian's command center. It shares a control folder with you in his GE
 | `Zordon/skills/<name>/SKILL.md` | The team skill library (panel-schedule, contract-review, drawing-overlay, spec-review, and whatever Damian adds) |
 | `Zordon/jobs/*.json` | Work Zordon has queued for you |
 | `Zordon/_Inbox/` | Where you report back (and where any file can be dropped to be auto-filed) |
-| `5. PROJECTS/<Job #>/` | The real job folders (GEC2 job start-up template, 01 COST CONTROL … 15 PREFAB) |
+| `5. PROJECTS/<Job #> - <Description>/` | The real job folders, laid out like `5. PROJECTS/0. JOB TEMPLATE - DO NOT DELETE` (never delete or rename that template) |
 | `00 Cowork Claude/` | Your own workspace: Current / Archive / Source per deliverable |
 
 The OneDrive root on his computer is the folder named like `OneDrive - <company>`. If you can't see it, ask Damian to give you access to that folder.
@@ -30,15 +30,37 @@ The OneDrive root on his computer is the folder named like `OneDrive - <company>
    - Do the work. Save every deliverable in `output_folder` (create it if missing), named per `FILING.md`. Never overwrite; add ` v2`, ` v3`.
    - Write the report to the job's `report_to` path (`Zordon/_Inbox/job-<id>.result.zordon.json`):
      ```json
-     {"type":"zordon.job_result","job_id":12,"status":"done","note":"Built LP-2A and LP-4 schedules; LP-4 phase B is 18% heavier, flagged in the sheet.","outputs":[{"path":"5. PROJECTS/G3251/03 CONSTRUCTION SET/G3251_32ND ST - DWG - Panel Schedules LP-2A LP-4 (10.05.2026).xlsx","title":"Panel schedules LP-2A, LP-4"}]}
+     {"type":"zordon.job_result","job_id":12,"status":"done","note":"Built LP-2A and LP-4 schedules; LP-4 phase B is 18% heavier, flagged in the sheet.","outputs":[{"path":"5. PROJECTS/G3251/03 CONSTRUCTION SET/G3251_32ND ST - DWG - Panel Schedules LP-2A LP-4 - 2026-10-05.xlsx","title":"Panel schedules LP-2A, LP-4"}]}
      ```
      `status` is `done`, `needs_input` or `failed`. Paths are from the OneDrive root, using forward slashes.
    - Don't delete or edit the job file. Zordon clears it when it reads your report.
 3. Finish with a short summary: what was done, where it was saved, and anything that needs Damian.
 
+## Change orders from the Job Control Workbook
+
+Each job folder has Damian's `GEC2_Job_Control_Workbook.xlsm`. When he makes a change order PDF from it (or says
+"send CO 001 to Zordon"):
+
+1. Find the newest CO PDF he just made: the file he names, or the most recent `.pdf` with "CO" and a number in its name
+   in that job's folder (check the job folder and `01 COST CONTROL/04 CHANGE ORDERS`). If more than one could be it, ask.
+2. Copy it **unchanged** (same name, same content) into `Zordon/_Inbox`. Don't rename or merge it yourself.
+3. Zordon then:
+   - creates or finds `01 COST CONTROL/04 CHANGE ORDERS/1 PENDING (not yet submitted to GC)/CO 001 - <description>`
+     (the description is what follows "CO 001" in the file name, so the job number and job name drop off);
+   - puts the CO form at the top of that folder;
+   - builds the package for the GC, `CO 001 - <Job #> - <description>.pdf`, in the same folder: a contents page, then
+     the CO form, `01 PRICING - BACKUP`, any estimate folder, `02 RFP-RFI REFERENCE` and `03 T&M TAGS`;
+   - adds a task for Damian to review and send it.
+4. Backup files go in the CO folder's subfolders (quotes → `01 PRICING - BACKUP`, RFIs/RFPs → `02 RFP-RFI REFERENCE`,
+   T&M tags → `03 T&M TAGS`), named `CO 001 - <what it is>`. Save them as PDF (or JPG/PNG) so they can be merged.
+   Zordon rebuilds the package when new backup is filed through it, and on the "Build GC package" button.
+5. Tell Damian the CO number and description you sent, and that the package will be in the CO folder within a minute.
+
+The workbook itself (`.xlsm`) is the source of truth for change orders, submittals and billing. Never edit it.
+
 ## Saving anything else
 
-Whenever Damian asks you to make or save something for a job, file it per `FILING.md`. The format is `<Job #>_<SHORT NAME> - <TYPE> [number] - <Description> (MM.DD.YYYY).ext`, in the right `5. PROJECTS/<Job #>/<NN FOLDER>`. If you can't tell the job or the type, ask, or save to `Zordon/_Inbox` and Zordon will file it. Keep your own build files in `00 Cowork Claude/<deliverable>/Current|Archive|Source`.
+Whenever Damian asks you to make or save something for a job, file it per `FILING.md`. The format is `<Job #>_<SHORT NAME> - <TYPE> [number] - <Description> - YYYY-MM-DD.ext`, in the right folder of the job (see `FILING.md`, which follows the job template). If you can't tell the job or the type, ask, or save to `Zordon/_Inbox` and Zordon will file it. Keep your own build files in `00 Cowork Claude/<deliverable>/Current|Archive|Source`.
 
 ## Learning Damian's way of doing things
 
