@@ -16,6 +16,7 @@ A project coordination hub for a construction PM, the APM, the project engineer 
 | **Email Intel** | Paste (or automate) an email. Zordon extracts tasks, owners, due dates, meetings and Procore/Autodesk items. |
 | **Reminders** | Drafts a nudge for anyone with late or soon-due work. Open it in your email, copy it to Teams, and keep a sent log. |
 | **OneDrive** | Browse your real GEC2 OneDrive inside Zordon: every job's folder (📁 Folder on each project), drawings, submittals. Click a file to open it on your computer. Read-only. |
+| **Job Control Workbook** | Read-only view of each job's `GEC2_Job_Control_Workbook.xlsm`: its Dashboard (contract, change orders, billing) and any tab, as last saved in Excel. Zordon never edits it or runs its macros. |
 | **File Vault** | Every file gets a consistent name and home: `JOB-Project-Name/NN-Type/YYYY-MM-DD_JOB_Type_Description.ext`. Drop files in, or save anything into `_Inbox` and it's filed within a minute. Point it at OneDrive and it syncs everywhere. |
 
 Change orders and billing are treated as cash flow: they're never below *High* priority, become *Critical* inside 3 days, and lead Zordon's briefing.
@@ -201,7 +202,7 @@ Zordon is built to run on your own computer. Before you put it on a server or op
 
 ```bash
 npm run dev    # restart on file changes
-npm test       # 52 tests: parsing, scheduling, doc control, naming, packages, archive, API
+npm test       # 55 tests: parsing, scheduling, doc control, naming, packages, archive, API
 ```
 
 - `server/`: zero-framework Node HTTP server. SQLite via Node's built-in `node:sqlite` (`data/zordon.db`).

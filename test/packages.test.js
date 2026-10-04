@@ -288,3 +288,38 @@ test('job folders grouped one level down are found (5. PROJECTS/TOUCH N GO/G2934
   assert.equal(await findJobFolder(root, { code: 'G2934', name: 'Apple Crossing - AEC PH1 Test (TNG)' }), '5. PROJECTS/TOUCH N GO/G2934');
   assert.equal(await findJobFolder(root, { code: 'G3249', name: 'SWA Cargo' }), '5. PROJECTS/G3249');
 });
+
+test('reads a macro-enabled Job Control Workbook without changing it', async () => {
+  const ExcelJS = (await import('exceljs')).default;
+  const JSZip = (await import('jszip')).default;
+  const { readFile, writeFile, stat } = await import('node:fs/promises');
+  const { findWorkbook, readWorkbook, readSheet } = await import('../server/workbook.js');
+  const root = await mkdtemp(join(tmpdir(), 'zordon-wb-'));
+  await mkdir(join(root, '5. PROJECTS/G3212/01 COST CONTROL/Archive'), { recursive: true });
+  const wb = new ExcelJS.Workbook();
+  const d = wb.addWorksheet('DASHBOARD');
+  d.addRow(['JOB COST DASHBOARD']); d.addRow(['JOB', 'G3212']);
+  d.addRow(['Original contract', 1250000]); d.getCell('B3').numFmt = '$#,##0.00';
+  d.addRow(['Approved change orders', { formula: 'B3*0.04', result: 50000 }]); d.getCell('B4').numFmt = '$#,##0.00';
+  wb.addWorksheet('CO LOG').addRow(['CO #', 'Description', 'Amount', 'Status']);
+  const p = join(root, '5. PROJECTS/G3212/01 COST CONTROL/G3212 GEC2_Job_Control_Workbook.xlsm');
+  await wb.xlsx.writeFile(p);
+  const zip = await JSZip.loadAsync(await readFile(p));
+  zip.file('[Content_Types].xml', (await zip.file('[Content_Types].xml').async('string'))
+    .replace('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml', 'application/vnd.ms-excel.sheet.macroEnabled.main+xml'));
+  zip.file('xl/vbaProject.bin', Buffer.from('macros'));
+  await writeFile(p, await zip.generateAsync({ type: 'nodebuffer' }));
+  await writeFile(join(root, '5. PROJECTS/G3212/01 COST CONTROL/Archive/GEC2_Job_Control_Workbook.xlsm'), 'old');
+  const before = await readFile(p);
+
+  const found = await findWorkbook(root, '5. PROJECTS/G3212');
+  assert.equal(found.path, '5. PROJECTS/G3212/01 COST CONTROL/G3212 GEC2_Job_Control_Workbook.xlsm', 'archive copies are ignored');
+  const data = await readWorkbook(root, found.path);
+  assert.deepEqual(data.sheets.map((x) => x.name), ['DASHBOARD', 'CO LOG']);
+  const item = (l) => data.dashboard.items.find((i) => i.label === l);
+  assert.equal(item('Original contract').value, 1250000);
+  assert.equal(item('Original contract').money, true);
+  assert.equal(item('Approved change orders').value, 50000, 'formulas show the value Excel saved');
+  assert.deepEqual((await readSheet(root, found.path, 'CO LOG')).rows[0], ['CO #', 'Description', 'Amount', 'Status']);
+  assert.ok(before.equals(await readFile(p)), 'the workbook is never written');
+});

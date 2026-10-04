@@ -390,3 +390,6 @@ body:has(#demo-banner:not([hidden])) #view { padding-top: 76px; }
 .wx-strip em { font-style: normal; color: var(--dim, #7f93ad); font-weight: 400; }
 .wx-warn { margin-top: 6px; display: grid; gap: 2px; }
 @media (max-width: 700px) { .wx-row { grid-template-columns: 1fr auto; } .wx-strip { grid-column: 1 / -1; } }
+.wb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 4px 18px; }
+.wb-row { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; border-bottom: 1px solid var(--line); }
+.wb-head { grid-column: 1 / -1; margin-top: 8px; font-weight: 700; letter-spacing: .06em; color: var(--cyan, #5ad1ff); font-size: 12px; text-transform: uppercase; }

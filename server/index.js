@@ -18,6 +18,7 @@ import { oneDriveStatus, listFolder, openOnComputer } from './onedrive.js';
 import { STAGES, packageType, stageFor, ensurePackage, coSubfolder, coLabel, specKey, recordPackage, setStage, listPackages } from './packages.js';
 import { template, loadTemplate, copyTemplate, templateDir } from './template.js';
 import { compileCo } from './compile.js';
+import { findWorkbook, readWorkbook, readSheet } from './workbook.js';
 import { leadTime, createElectricalPlan, LEAD_TIMES } from './electrical.js';
 import { loadBuiltinSkills, listSkills, saveSkill, createJob, listJobs, syncControl, importJobResult, filingRules,
   importProposal, decideProposal, listProposals } from './claude.js';
@@ -677,6 +678,20 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
     }],
     ['GET', '/api/inbox/status', () => ({ ...inboxStatus, inbox: join(vaultRoot, INBOX) })],
     ['POST', '/api/inbox/check', async () => { await processInbox(db, vaultRoot, today()); return { ...inboxStatus, inbox: join(vaultRoot, INBOX) }; }],
+    // ----- Job Control Workbook (read-only) -----
+    ['GET', '/api/projects/:id/workbook', async ({ params, query }) => {
+      const project = mustExist(db.prepare('SELECT * FROM projects WHERE id = ?').get(Number(params.id)), 'Project');
+      const found = await findWorkbook(vaultRoot, projectFolder(project));
+      if (!found) return { found: false, folder: projectFolder(project) };
+      try {
+        if (query.sheet) return { found: true, ...(await readSheet(vaultRoot, found.path, query.sheet)), path: found.path };
+        return { found: true, ...(await readWorkbook(vaultRoot, found.path)) };
+      } catch (err) {
+        if (err.status) throw new HttpError(err.status, err.message);
+        return { found: true, path: found.path, error: /lock|busy|EBUSY/i.test(err.message) ? 'The workbook is open and locked; close it in Excel and try again.' : `Could not read it (${err.message})` };
+      }
+    }],
+
     // ----- OneDrive browser -----
     ['GET', '/api/onedrive', ({ query }) => (query.path === undefined ? oneDriveStatus(vaultRoot)
       : listFolder(vaultRoot, query.path).catch((err) => { throw new HttpError(err.status || 404, err.status ? err.message : 'Folder not found'); }))],

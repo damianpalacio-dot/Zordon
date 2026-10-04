@@ -18,7 +18,7 @@ async function projects(el, _p, { render }) {
           <div class="bar"><span style="width:${p.progress}%"></span></div>
           <div class="row small"><span>${p.progress}% done</span><span class="spacer"></span><span>${p.open} open</span>${p.delayed ? `<span class="pill h-delayed">${p.delayed} late</span>` : ''}</div>
           <div class="row"><a class="btn sm" href="#/board?project_id=${p.id}">Board</a><a class="btn sm" href="#/schedule?project_id=${p.id}">Look-ahead</a>
-            <a class="btn sm" href="#/onedrive?path=${encodeURIComponent(p.folder || `5. PROJECTS/${p.code || p.name}`)}">📁 Folder</a><a class="btn sm" href="#/vault?project_id=${p.id}">Files</a><button class="btn sm gold" data-eplan="${p.id}">⚡ Electrical plan</button><span class="spacer"></span><button class="btn sm ghost" data-edit="${p.id}">Edit</button></div>
+            <a class="btn sm" href="#/onedrive?path=${encodeURIComponent(p.folder || `5. PROJECTS/${p.code || p.name}`)}">📁 Folder</a><a class="btn sm" href="#/vault?project_id=${p.id}">Files</a><a class="btn sm" href="#/workbook?project_id=${p.id}">📊 Workbook</a><button class="btn sm gold" data-eplan="${p.id}">⚡ Electrical plan</button><span class="spacer"></span><button class="btn sm ghost" data-edit="${p.id}">Edit</button></div>
         </section>`).join('')}
       <section class="panel">
         <h2>New project</h2>
@@ -99,6 +99,35 @@ async function onedrive(el, params) {
   });
   el.querySelector('#open-here').addEventListener('click', () => guard(() => api('/api/onedrive/open', { method: 'POST', body: { path: listing.path || '.' } })));
   el.querySelector('#jump')?.addEventListener('change', (e) => { if (e.target.value) location.hash = `#/onedrive?path=${encodeURIComponent(e.target.value)}`; });
+}
+
+// ---------------- Job Control Workbook (read-only) ----------------
+const fmtVal = (v, money) => (typeof v === 'number' ? (money ? v.toLocaleString(undefined, { style: 'currency', currency: 'USD' }) : v.toLocaleString()) : String(v ?? ''));
+async function workbook(el, params) {
+  const pid = params.get('project_id') || store.projects.find((p) => p.code)?.id;
+  const sheet = params.get('sheet');
+  const wb = pid ? await api(`/api/projects/${pid}/workbook${sheet ? `?sheet=${encodeURIComponent(sheet)}` : ''}`) : { found: false };
+  const pick = `<select id="wb-job">${options(store.projects.filter((p) => p.code), pid, { text: (p) => `${p.code} ${p.short_name || p.name}` })}</select>`;
+  let body;
+  if (!wb.found) body = `<div class="empty">No Job Control Workbook found in <span class="mono">${esc(wb.folder || '')}</span>. Zordon looks for a file named like <span class="mono">GEC2_Job_Control_Workbook.xlsm</span> in the job's folders.</div>`;
+  else if (wb.error) body = `<div class="empty">${esc(wb.error)}</div>`;
+  else if (wb.rows) {
+    body = `<div class="table-wrap"><table><tbody>${wb.rows.map((r) => `<tr>${r.map((v) => `<td class="small">${esc(fmtVal(v))}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+  } else {
+    body = `<section class="panel"><header><h2>${esc(wb.dashboard?.name || 'Dashboard')}</h2><span class="small dim">as last saved in Excel</span></header>
+      <div class="wb-grid">${(wb.dashboard?.items || []).map((i) => i.value === null
+        ? `<div class="wb-head">${esc(i.label)}</div>`
+        : `<div class="wb-row"><span class="muted">${esc(i.label)}</span><b class="${i.money ? 'mono' : ''}">${esc(fmtVal(i.value, i.money))}</b></div>`).join('') || '<div class="empty">The first sheet has no label/value rows.</div>'}</div></section>`;
+  }
+  el.innerHTML = `
+    <div class="page-head"><div><h1>Job Control Workbook</h1><p>Read-only view of the job's workbook: Zordon never edits it or runs its macros.</p></div>
+      <div class="row">${pick}${wb.path ? '<button class="btn" id="wb-open">Open in Excel</button>' : ''}</div></div>
+    ${wb.path ? `<div class="small muted mono" style="margin-bottom:10px">${esc(wb.path)}${wb.modified ? ` · saved ${esc(new Date(wb.modified).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))}` : ''}</div>` : ''}
+    ${wb.sheets ? `<div class="chips" style="margin-bottom:12px">${wb.sheets.map((x) => `<a class="chip" href="#/workbook?project_id=${pid}&sheet=${encodeURIComponent(x.name)}">${esc(x.name)}</a>`).join('')}</div>` : ''}
+    ${sheet ? `<div class="crumbs" style="margin-bottom:10px"><a href="#/workbook?project_id=${pid}">Dashboard</a> <span class="dim">/</span> ${esc(sheet)}</div>` : ''}
+    ${body}`;
+  el.querySelector('#wb-job')?.addEventListener('change', (e) => { location.hash = `#/workbook?project_id=${e.target.value}`; });
+  el.querySelector('#wb-open')?.addEventListener('click', () => guard(() => api('/api/onedrive/open', { method: 'POST', body: { path: wb.path } })));
 }
 
 // ---------------- RFIs & submittals ----------------
@@ -907,4 +936,4 @@ async function claude(el, params, { render }) {
   el.querySelector('#copy-run').addEventListener('click', () => navigator.clipboard.writeText('Run my Zordon jobs.').then(() => toast('Copied — paste it into Claude Cowork')));
 }
 
-export const views = { claude, projects, onedrive, doccontrol, schedule, meetings, inbox, reminders, vault, team };
+export const views = { claude, projects, onedrive, workbook, doccontrol, schedule, meetings, inbox, reminders, vault, team };
