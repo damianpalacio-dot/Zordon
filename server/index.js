@@ -13,6 +13,7 @@ import { connectorStatus, syncAll } from './connectors.js';
 import { createVoiceSession, greeting, say, FAREWELL } from './voice.js';
 import { projectWeather } from './weather.js';
 import { scanOld, applyPlan, listArchiveLogs, undoArchive } from './cleanup.js';
+import { oneDriveStatus, listFolder, openOnComputer } from './onedrive.js';
 import { STAGES, packageType, stageFor, ensurePackage, stageFolder, specKey, recordPackage, setStage, listPackages } from './packages.js';
 import { leadTime, createElectricalPlan, LEAD_TIMES } from './electrical.js';
 import { loadBuiltinSkills, listSkills, saveSkill, createJob, listJobs, syncControl, importJobResult, filingRules,
@@ -390,7 +391,7 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
         ...dashboard(db, today()),
         doccontrol: docControlSummary(db, today()),
         focus_person_id: mePersonId(db),
-        systems: { ai: aiEnabled(), voice: voice.enabled(), connectors: connectorStatus() },
+        systems: { ai: aiEnabled(), voice: voice.enabled(), connectors: connectorStatus(), onedrive: Boolean(process.env.ZORDON_VAULT) && vaultRoot === process.env.ZORDON_VAULT },
       };
     }],
 
@@ -552,6 +553,10 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
     ['POST', '/api/cleanup/undo', async ({ body }) => {
       try { return await undoArchive(vaultRoot, required(body.log, 'log')); } catch (err) { throw new HttpError(400, err.message); }
     }],
+    // ----- OneDrive browser -----
+    ['GET', '/api/onedrive', ({ query }) => (query.path === undefined ? oneDriveStatus(vaultRoot)
+      : listFolder(vaultRoot, query.path).catch((err) => { throw new HttpError(err.status || 404, err.status ? err.message : 'Folder not found'); }))],
+    ['POST', '/api/onedrive/open', async ({ body }) => openOnComputer(vaultRoot, required(body.path, 'path'))],
     ['GET', '/api/vault', () => ({ root: vaultRoot, inbox: join(vaultRoot, INBOX), projects_dir: join(vaultRoot, projectFolder({ code: '<Job #>' })), folders: JOB_TEMPLATE })],
     ['GET', '/api/documents/:id/file', ({ params }) => {
       const d = getDoc(params.id);

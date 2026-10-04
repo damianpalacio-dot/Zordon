@@ -21,7 +21,7 @@ async function commandView(el) {
       <span class="hud-date">${fmtDate(d.today, { weekday: 'long', month: 'long', day: 'numeric' }).toUpperCase()}</span>
       <span class="hud-weather" id="hud-weather"></span>
       <span class="spacer"></span>
-      ${light('VOICE', sys.voice)}${light('CLAUDE', sys.ai)}${sys.connectors.map((x) => light(x.name.toUpperCase(), x.configured)).join('')}
+      ${light('ONEDRIVE', sys.onedrive)}${light('VOICE', sys.voice)}${light('CLAUDE', sys.ai)}${sys.connectors.map((x) => light(x.name.toUpperCase(), x.configured)).join('')}
       <span class="hud-alert"><span class="lamp"></span>${esc(alertText.toUpperCase())}</span>
     </div>
     <div class="page-head">

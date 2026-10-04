@@ -373,3 +373,6 @@ pre.reminder { white-space: pre-wrap; background: #08101b; border: 1px solid var
 .demo-banner[hidden] { display: none; }
 @media (max-width: 900px) { .demo-banner { left: 16px; right: 16px; } }
 body:has(#demo-banner:not([hidden])) #view { padding-top: 76px; }
+.crumbs a { color: var(--cyan, #5ad1ff); text-decoration: none; }
+.crumbs a:hover { text-decoration: underline; }
+.od-row:hover td { background: rgba(90, 209, 255, .06); }

@@ -18,7 +18,7 @@ async function projects(el, _p, { render }) {
           <div class="bar"><span style="width:${p.progress}%"></span></div>
           <div class="row small"><span>${p.progress}% done</span><span class="spacer"></span><span>${p.open} open</span>${p.delayed ? `<span class="pill h-delayed">${p.delayed} late</span>` : ''}</div>
           <div class="row"><a class="btn sm" href="#/board?project_id=${p.id}">Board</a><a class="btn sm" href="#/schedule?project_id=${p.id}">Look-ahead</a>
-            <a class="btn sm" href="#/vault?project_id=${p.id}">Files</a><button class="btn sm gold" data-eplan="${p.id}">⚡ Electrical plan</button><span class="spacer"></span><button class="btn sm ghost" data-edit="${p.id}">Edit</button></div>
+            <a class="btn sm" href="#/onedrive?path=${encodeURIComponent(p.folder || `5. PROJECTS/${p.code || p.name}`)}">📁 Folder</a><a class="btn sm" href="#/vault?project_id=${p.id}">Files</a><button class="btn sm gold" data-eplan="${p.id}">⚡ Electrical plan</button><span class="spacer"></span><button class="btn sm ghost" data-edit="${p.id}">Edit</button></div>
         </section>`).join('')}
       <section class="panel">
         <h2>New project</h2>
@@ -56,6 +56,49 @@ async function projects(el, _p, { render }) {
     const status = prompt('Status: active, on_hold or closed', p.status);
     guard(async () => { await api(`/api/projects/${p.id}`, { method: 'PATCH', body: { name, code, short_name, folder: folder || null, status } }); render(); });
   });
+}
+
+// ---------------- OneDrive ----------------
+// Browse the real GEC2 OneDrive: job folders, drawings, submittals. Click a file to open it on this computer.
+const fmtSize = (n) => (n == null ? '' : n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1048576).toFixed(1)} MB`);
+async function onedrive(el, params) {
+  const status = await api('/api/onedrive');
+  if (!status.connected) {
+    el.innerHTML = `<div class="page-head"><div><h1>OneDrive</h1></div></div>
+      <section class="panel"><h2>Not connected</h2><p>Zordon can't see your GEC2 OneDrive on this computer. Make sure OneDrive is signed in and syncing, then restart Zordon.</p></section>`;
+    return;
+  }
+  const path = params.get('path') ?? status.projects_dir ?? '';
+  let listing;
+  try { listing = await api(`/api/onedrive?path=${encodeURIComponent(path)}`); } catch (err) {
+    listing = { path, items: [], error: err.message };
+  }
+  const parts = listing.path ? listing.path.split('/') : [];
+  const crumbs = [`<a href="#/onedrive?path=">OneDrive</a>`, ...parts.map((name, i) =>
+    `<a href="#/onedrive?path=${encodeURIComponent(parts.slice(0, i + 1).join('/'))}">${esc(name)}</a>`)].join(' <span class="dim">/</span> ');
+  const job = store.projects.find((p) => listing.path && (listing.path === p.folder || listing.path === `${status.projects_dir}/${p.code}`));
+  el.innerHTML = `
+    <div class="page-head">
+      <div><h1>OneDrive</h1><p><span class="pill h-done">● Connected</span> <span class="mono small">${esc(status.root)}</span>
+        · ${status.job_folders} job folders in <span class="mono">${esc(status.projects_dir)}</span></p></div>
+      <div class="row">${store.projects.length ? `<select id="jump">${options(store.projects.filter((p) => p.code), '', { empty: 'Jump to a job…', value: (p) => p.folder || `${status.projects_dir}/${p.code}`, text: (p) => `${p.code} ${p.short_name || p.name}` })}</select>` : ''}
+        <button class="btn" id="open-here">📂 Open in File Explorer</button></div>
+    </div>
+    <div class="crumbs" style="margin-bottom:12px">${crumbs}${job ? ` <span class="pill">${esc(job.name)}</span>` : ''}</div>
+    ${listing.error ? `<div class="empty">${esc(listing.error)}${job ? ' — this job has no folder yet. Use File Vault → Create project folders.' : ''}</div>` : ''}
+    <div class="table-wrap"><table>
+      <thead><tr><th>Name</th><th>Modified</th><th>Size</th></tr></thead>
+      <tbody>${listing.items.map((i) => `<tr class="od-row" data-path="${esc(i.path)}" data-dir="${i.dir ? 1 : ''}" style="cursor:pointer">
+        <td>${i.dir ? '📁' : '📄'} ${esc(i.name)}</td><td class="small">${esc(i.modified || '')}</td><td class="small">${i.dir ? '' : fmtSize(i.size)}</td></tr>`).join('')
+        || (listing.error ? '' : '<tr><td colspan="3" class="dim">Empty folder.</td></tr>')}</tbody>
+    </table></div>
+    <p class="small dim" style="margin-top:10px">Click a folder to open it here; click a file to open it on this computer. Zordon never moves or deletes anything from this page.</p>`;
+  wire(el, '.od-row', 'click', (_e, n) => {
+    if (n.dataset.dir) location.hash = `#/onedrive?path=${encodeURIComponent(n.dataset.path)}`;
+    else guard(async () => { await api('/api/onedrive/open', { method: 'POST', body: { path: n.dataset.path } }); toast('Opening…'); });
+  });
+  el.querySelector('#open-here').addEventListener('click', () => guard(() => api('/api/onedrive/open', { method: 'POST', body: { path: listing.path || '.' } })));
+  el.querySelector('#jump')?.addEventListener('change', (e) => { if (e.target.value) location.hash = `#/onedrive?path=${encodeURIComponent(e.target.value)}`; });
 }
 
 // ---------------- RFIs & submittals ----------------
@@ -826,4 +869,4 @@ async function claude(el, params, { render }) {
   el.querySelector('#copy-run').addEventListener('click', () => navigator.clipboard.writeText('Run my Zordon jobs.').then(() => toast('Copied — paste it into Claude Cowork')));
 }
 
-export const views = { claude, projects, doccontrol, schedule, meetings, inbox, reminders, vault, team };
+export const views = { claude, projects, onedrive, doccontrol, schedule, meetings, inbox, reminders, vault, team };

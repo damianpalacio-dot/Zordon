@@ -142,3 +142,19 @@ test('unflagged demo data from older versions is recognised', async () => {
   assert.equal(db.prepare("SELECT value FROM settings WHERE key = 'demo_data'").get()?.value, 'true');
   db.close();
 });
+
+test('OneDrive browser lists job folders and never leaves the vault', async () => {
+  const { oneDriveStatus, listFolder, safePath } = await import('../server/onedrive.js');
+  const root = await mkdtemp(join(tmpdir(), 'zordon-od-'));
+  await mkdir(join(root, '5. PROJECTS/G2707/14 SUBMITTALS'), { recursive: true });
+  await mkdir(join(root, '5. PROJECTS/LAUSD 32ND ST'), { recursive: true });
+  await writeFile(join(root, '5. PROJECTS/G2707/notes.pdf'), 'x');
+  await writeFile(join(root, '5. PROJECTS/G2707/desktop.ini'), 'x');
+  const st = await oneDriveStatus(root);
+  assert.equal(st.connected, true);
+  assert.equal(st.job_folders, 2);
+  const list = await listFolder(root, '5. PROJECTS/G2707');
+  assert.deepEqual(list.items.map((i) => [i.name, i.dir]), [['14 SUBMITTALS', true], ['notes.pdf', false]]);
+  assert.equal(list.items[1].path, '5. PROJECTS/G2707/notes.pdf');
+  assert.throws(() => safePath(root, '../../etc'), /outside your OneDrive/);
+});

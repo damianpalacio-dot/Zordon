@@ -18,8 +18,10 @@ if not exist .env if exist .env.txt ren .env.txt .env
 rem Zordon finds the GEC2 OneDrive by itself; .env is only needed to override it.
 if not exist .env copy .env.example .env >nul
 if not exist node_modules (call npm install)
-start "Zordon server" /min cmd /c "npm start"
 set URL=http://localhost:4000
+rem Already running? Just open the window.
+curl -s -o nul %URL%/api/health && goto :up
+start "Zordon server" /min cmd /c "npm start"
 rem Wait until Zordon answers (up to 90 seconds) so the window never opens on a blank page.
 echo Starting Zordon, one moment...
 set /a TRIES=0

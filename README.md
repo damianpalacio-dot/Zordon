@@ -15,6 +15,7 @@ A project coordination hub for a construction PM, the APM, the project engineer 
 | **Meetings** | Huddles, OACs and coordination meetings, with notes and action items that go straight onto the board. |
 | **Email Intel** | Paste (or automate) an email. Zordon extracts tasks, owners, due dates, meetings and Procore/Autodesk items. |
 | **Reminders** | Drafts a nudge for anyone with late or soon-due work. Open it in your email, copy it to Teams, and keep a sent log. |
+| **OneDrive** | Browse your real GEC2 OneDrive inside Zordon: every job's folder (📁 Folder on each project), drawings, submittals. Click a file to open it on your computer. Read-only. |
 | **File Vault** | Every file gets a consistent name and home: `JOB-Project-Name/NN-Type/YYYY-MM-DD_JOB_Type_Description.ext`. Drop files in, or save anything into `_Inbox` and it's filed within a minute. Point it at OneDrive and it syncs everywhere. |
 
 Change orders and billing are treated as cash flow: they're never below *High* priority, become *Critical* inside 3 days, and lead Zordon's briefing.
@@ -45,8 +46,8 @@ team and jobs automatically. To wipe the board on this computer and start over, 
 
 ### Updating
 
-When Claude pushes changes, close Zordon and double-click `scripts/update-zordon.bat` (Mac: `update-zordon.command`),
-then start it again. Your data (`data/zordon.db`) and files are never touched by an update.
+When Claude pushes changes, double-click `scripts/update-zordon.bat` (Mac: `update-zordon.command`). On Windows it
+downloads the latest version (no Git needed), keeps your data, settings and Node, and starts Zordon again. Your data (`data/zordon.db`) and files are never touched by an update.
 
 ### Adding your own logic
 
