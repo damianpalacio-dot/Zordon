@@ -276,6 +276,10 @@ export function loadRoster(db, roster) {
   if (!isDemo && db.prepare('SELECT COUNT(*) AS n FROM people').get().n > 0) return false;
   const people = Array.isArray(roster?.people) ? roster.people.filter((p) => p?.name) : [];
   if (!people.length) return false;
+  // A roster written from demo data (older versions did this) is not the real team.
+  const demoRoster = (roster.projects || []).some((p) => ['AGM-101', 'CCR-202'].includes(p?.code))
+    || people.some((p) => /@example\.com$/i.test(p.email || ''));
+  if (demoRoster) { rosterStatus.error = 'demo roster'; return false; }
   if (isDemo) clearDemo(db);
   const colors = RANGER_COLORS;
   const insertPerson = db.prepare('INSERT INTO people (name, role, trade, email, color) VALUES (?, ?, ?, ?, ?)');

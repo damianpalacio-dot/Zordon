@@ -315,9 +315,15 @@ export async function detectVault(env = process.env, home = homedir()) {
   for (const e of await readdir(home, { withFileTypes: true }).catch(() => [])) {
     if (e.isDirectory() && /^onedrive/i.test(e.name)) candidates.push(join(home, e.name));
   }
+  // A common slip: pointing at "…\OneDrive - GEC2\5. PROJECTS" instead of the OneDrive itself. Try the parent too.
+  for (const c of [...candidates]) {
+    if (c && projectsDir() && c.split(/[\\/]/).pop().toLowerCase() === projectsDir().toLowerCase()) candidates.push(dirname(c));
+  }
   const unique = [...new Set(candidates.filter(Boolean))];
   const has = (dir, ...rel) => stat(join(dir, ...rel)).then(() => true, () => false);
-  for (const dir of unique) if (await has(dir, CONTROL_DIR, 'zordon-roster.json')) return { path: dir, found: 'roster', tried: unique };
+  const roster = (dir) => has(dir, CONTROL_DIR, 'zordon-roster.json');
+  for (const dir of unique) if (await roster(dir) && await has(dir, projectsDir() || '.')) return { path: dir, found: 'roster', tried: unique };
+  for (const dir of unique) if (await roster(dir)) return { path: dir, found: 'roster', tried: unique };
   for (const dir of unique) if (await has(dir, projectsDir() || '.')) return { path: dir, found: 'projects', tried: unique };
   return { path: clean(env.ZORDON_VAULT) || null, found: null, tried: unique };
 }

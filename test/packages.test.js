@@ -158,3 +158,19 @@ test('OneDrive browser lists job folders and never leaves the vault', async () =
   assert.equal(list.items[1].path, '5. PROJECTS/G2707/notes.pdf');
   assert.throws(() => safePath(root, '../../etc'), /outside your OneDrive/);
 });
+
+test('a vault pointed at "5. PROJECTS" or a demo roster is not mistaken for the real one', async () => {
+  const { detectVault } = await import('../server/vault.js');
+  const { loadRoster } = await import('../server/index.js');
+  const home = await mkdtemp(join(tmpdir(), 'zordon-home2-'));
+  const od = join(home, 'OneDrive - GEC2');
+  await mkdir(join(od, '5. PROJECTS', 'Zordon'), { recursive: true });
+  await writeFile(join(od, '5. PROJECTS', 'Zordon', 'zordon-roster.json'), '{}'); // the stray copy
+  await mkdir(join(od, 'Zordon'), { recursive: true });
+  await writeFile(join(od, 'Zordon', 'zordon-roster.json'), '{}');
+  assert.equal((await detectVault({ ZORDON_VAULT: join(od, '5. PROJECTS') }, home)).path, od);
+
+  const db = freshDb();
+  db.exec('DELETE FROM people; DELETE FROM projects');
+  assert.equal(loadRoster(db, { people: [{ name: 'Jordan Lee', email: 'jordan.lee@example.com' }], projects: [{ name: 'Angel Grove', code: 'AGM-101' }] }), false);
+});
