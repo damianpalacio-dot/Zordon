@@ -5,10 +5,11 @@
 const env = (k, d = undefined) => process.env[k] ?? d;
 
 // "zordonProjectId:externalProjectId,..." → [{ local, external }]
+// "G2707:562949953421312, G3249:562949953425000" — the left side is the GEC2 job number (or Zordon's project id).
 function projectMap(value) {
   return String(value || '').split(',').map((s) => s.trim()).filter(Boolean).map((pair) => {
     const [local, external] = pair.split(':').map((x) => x.trim());
-    return { local: Number(local), external };
+    return { local: /^\d+$/.test(local) ? Number(local) : local, external };
   }).filter((p) => p.local && p.external);
 }
 

@@ -238,3 +238,10 @@ test('a vault pointed at "5. PROJECTS" or a demo roster is not mistaken for the 
   db.exec('DELETE FROM people; DELETE FROM projects');
   assert.equal(loadRoster(db, { people: [{ name: 'Jordan Lee', email: 'jordan.lee@example.com' }], projects: [{ name: 'Angel Grove', code: 'AGM-101' }] }), false);
 });
+
+test('Procore/Autodesk items can be mapped by job number', async () => {
+  const { upsertItems } = await import('../server/doccontrol.js');
+  const db = freshDb();
+  upsertItems(db, [{ origin: 'procore', external_id: '77', type: 'rfi', number: '12', title: 'Conduit routing', project_id: 'G2707' }], TODAY);
+  assert.equal(db.prepare("SELECT project_id FROM tracked_items WHERE external_id = '77'").get().project_id, 1);
+});

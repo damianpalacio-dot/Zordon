@@ -154,13 +154,13 @@ With `ANTHROPIC_API_KEY` set, Claude does the email triage and file naming. With
 1. Go to https://developers.procore.com and sign in with your Procore account. Create an app and add a **Developer Managed Service Account**.
 2. Have your Procore company admin install the app in your company (Company Admin → App Management) with read access to RFIs and Submittals on your projects.
 3. Put the **Client ID** and **Client Secret** in `.env` as `PROCORE_CLIENT_ID` / `PROCORE_CLIENT_SECRET`, plus `PROCORE_COMPANY_ID`. The company id is the number in your Procore URL.
-4. Map projects: `PROCORE_PROJECTS=1:562949953421312,2:562949953425000` (Zordon project id : Procore project id from the project URL).
+4. Map projects by job number: `PROCORE_PROJECTS=G2707:562949953421312,G3249:562949953425000` (job number : Procore project id from the project URL).
 5. `PROCORE_ME=you@company.com` so items assigned to you land on your list.
 
 ### Autodesk Construction Cloud / Forma
 1. Go to https://aps.autodesk.com and create an app. Copy the **Client ID** and **Client Secret**.
 2. Have your ACC account admin add the app under Account Admin → Custom Integrations.
-3. Fill `APS_CLIENT_ID`, `APS_CLIENT_SECRET`, `APS_USER_ID` (your Autodesk user id), and `ACC_PROJECTS=1:<acc-project-id>`.
+3. Fill `APS_CLIENT_ID`, `APS_CLIENT_SECRET`, `APS_USER_ID` (your Autodesk user id), and `ACC_PROJECTS=G3052:<acc-project-id>`.
 
 Zordon syncs every 30 minutes (`ZORDON_SYNC_MINUTES`); there's also a **Sync now** button. Autodesk's endpoint paths are configurable (`ACC_RFI_SEARCH_PATH`, `ACC_SUBMITTALS_PATH`) in case Autodesk versions them. Verify them against the current APS docs when you first connect.
 
