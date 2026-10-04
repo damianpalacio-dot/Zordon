@@ -16,24 +16,46 @@ Zordon is Damian's command center. It shares a control folder with you in his GE
 | `Zordon/skills/<name>/SKILL.md` | The team skill library (panel-schedule, contract-review, drawing-overlay, spec-review, and whatever Damian adds) |
 | `Zordon/jobs/*.json` | Work Zordon has queued for you |
 | `Zordon/_Inbox/` | Where you report back (and where any file can be dropped to be auto-filed) |
-| `5. PROJECTS/<Job #> - <Description>/` | The real job folders, laid out like `5. PROJECTS/0. JOB TEMPLATE - DO NOT DELETE` (never delete or rename that template) |
+| `5. PROJECTS/<Job #> - <Description>/` | The real job folders, laid out like `5. PROJECTS/0. JOB TEMPLATE - DO NOT DELETE` (never delete or rename that template). Some jobs sit one level down in a group folder, e.g. `5. PROJECTS/TOUCH N GO/G2934`. |
 | `00 Cowork Claude/` | Your own workspace: Current / Archive / Source per deliverable |
 
-The OneDrive root on his computer is the folder named like `OneDrive - <company>`. If you can't see it, ask Damian to give you access to that folder.
+## Reaching the OneDrive (two ways; use whichever works)
+
+**A. As local files (Cowork with folder access).** The OneDrive root is the folder named like `OneDrive - GEC2` on his
+computer. Paths in this skill are relative to it.
+
+**B. Through the Microsoft 365 connector (claude.ai chat, Cowork without folder access, routines).** Don't stop to ask
+Damian for folder access: load the connector tools with ToolSearch ("read resource", "sharepoint upload", "sharepoint
+folder search", "sharepoint copy", "sharepoint create folder") and use them:
+- His OneDrive's drive id is `b!wlSxO5kcCUKIrR9VEKm-4oR1fSmQBM5JhhequuY6KoA1XbcGqm14SIcWFk3fZVzm`. If that ever fails,
+  find it with `sharepoint_folder_search` for "Zordon" and take the `driveId` of the result whose web address ends in
+  `/Documents/Zordon`.
+- **List a folder / read a file:** `read_resource` with `file:///<driveId>/<path>`, e.g.
+  `file:///<driveId>/Zordon/jobs` or `file:///<driveId>/Zordon/skills/panel-schedule/SKILL.md` (spaces are fine).
+- **Write a file:** `sharepoint_upload_file` with the target folder's item id as `parentItemId` (from the folder
+  listing or `sharepoint_folder_search`), `content` for text/JSON, `conflictBehavior: "rename"`.
+- **Make folders / copy a folder:** `sharepoint_create_folder`, `sharepoint_copy_item` (e.g. to duplicate the job template).
+- Only say you can't reach the files if both A and B fail, and then say exactly which call failed.
 
 ## "Run my Zordon jobs"
 
-1. List `Zordon/jobs/*.json`, oldest first. Each job has `skill`, `skill_file`, `task`, `project`, `project_folder`, `output_folder`, `instructions` and `inputs` (file paths or links).
+1. List `Zordon/jobs/` (way A or B above). Every `*.json` file there is one job; do them oldest first (the number at
+   the start of the name). No files means no jobs: say so and stop. Each job has `skill`, `skill_file`, `task`,
+   `project`, `project_folder`, `output_folder`, `instructions` and `inputs` (file paths from the OneDrive root, or links).
 2. For each job:
-   - Read the skill file and follow it. It overrides general habits for that kind of work.
+   - Read `skill_file` (in `Zordon/skills/`) and follow it. It overrides general habits for that kind of work.
+   - `project_folder` is where Zordon thinks the job lives. Check it exists; if not, look for the job number elsewhere
+     (`sharepoint_folder_search` for the job number, including group folders like `5. PROJECTS/TOUCH N GO/G2934`) and
+     use the real folder. Never create a second folder for a job that already has one.
    - Read the inputs. If one is missing or unreadable, don't guess. Report `needs_input` and say exactly what you need.
-   - Do the work. Save every deliverable in `output_folder` (create it if missing), named per `FILING.md`. Never overwrite; add ` v2`, ` v3`.
-   - Write the report to the job's `report_to` path (`Zordon/_Inbox/job-<id>.result.zordon.json`):
+   - Do the work. Save every deliverable in the job's folder per `FILING.md`. Never overwrite; add ` v2`, ` v3`.
+   - Write the report to `Zordon/_Inbox/job-<id>.result.zordon.json` (the job's `report_to`):
      ```json
      {"type":"zordon.job_result","job_id":12,"status":"done","note":"Built LP-2A and LP-4 schedules; LP-4 phase B is 18% heavier, flagged in the sheet.","outputs":[{"path":"5. PROJECTS/G3251/03 CONSTRUCTION SET/G3251_32ND ST - DWG - Panel Schedules LP-2A LP-4 - 2026-10-05.xlsx","title":"Panel schedules LP-2A, LP-4"}]}
      ```
-     `status` is `done`, `needs_input` or `failed`. Paths are from the OneDrive root, using forward slashes.
-   - Don't delete or edit the job file. Zordon clears it when it reads your report.
+     `status` is `done`, `needs_input` or `failed`. `outputs` lists files you created (paths from the OneDrive root,
+     forward slashes); leave it empty when nothing new was made. Check the JSON parses before writing it.
+   - Don't delete or edit the job file. Zordon removes it when it reads your report (within a minute while Zordon runs).
 3. Finish with a short summary: what was done, where it was saved, and anything that needs Damian.
 
 ## Change orders from the Job Control Workbook

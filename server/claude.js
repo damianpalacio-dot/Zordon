@@ -5,6 +5,7 @@
 //   Zordon/_Inbox/job-<id>.result.zordon.json   Claude's report back
 import { template, templateDir, templateOutline, coLayout } from './template.js';
 import { readdir, readFile, rm } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { isoDate } from './db.js';
@@ -24,12 +25,23 @@ export async function loadBuiltinSkills(db) {
   const names = await readdir(BUILTIN_DIR).catch(() => []);
   const insert = db.prepare(`INSERT INTO skills (name, title, description, output_category, body, builtin) VALUES (?, ?, ?, ?, ?, 1)
     ON CONFLICT(name) DO NOTHING`);
+  const hashOf = (text) => createHash('sha1').update(text).digest('hex');
+  const shipped = JSON.parse(db.prepare("SELECT value FROM settings WHERE key = 'builtin_skill_hashes'").get()?.value || '{}');
   for (const name of names) {
     const body = await readFile(join(BUILTIN_DIR, name, 'SKILL.md'), 'utf8').catch(() => null);
     if (!body) continue;
     const fm = frontMatter(body);
     insert.run(name, fm.title || name, fm.description || '', fm.output_category || null, body);
+    // A new version of a built-in skill replaces the old one, unless Damian edited it (or approved a change to it).
+    const current = db.prepare('SELECT body, builtin FROM skills WHERE name = ?').get(name);
+    const untouched = current.builtin && (!shipped[name] || hashOf(current.body) === shipped[name]);
+    if (untouched && current.body !== body) {
+      db.prepare('UPDATE skills SET title = ?, description = ?, output_category = ?, body = ? WHERE name = ?')
+        .run(fm.title || name, fm.description || '', fm.output_category || null, body, name);
+    }
+    if (untouched) shipped[name] = hashOf(body);
   }
+  db.prepare("INSERT INTO settings (key, value) VALUES ('builtin_skill_hashes', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(shipped));
 }
 
 export const listSkills = (db) => db.prepare('SELECT * FROM skills ORDER BY builtin DESC, title').all();

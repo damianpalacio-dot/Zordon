@@ -279,3 +279,12 @@ test('a CO form PDF from the workbook creates "CO 001 - description" and compile
   assert.match(again.skipped[0].file, /labor\.xlsx$/);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE title LIKE 'Review and send CO 001%'").get().n, 1, 'one review task, not one per rebuild');
 });
+
+test('job folders grouped one level down are found (5. PROJECTS/TOUCH N GO/G2934)', async () => {
+  const { findJobFolder } = await import('../server/vault.js');
+  const root = await mkdtemp(join(tmpdir(), 'zordon-group-'));
+  await mkdir(join(root, '5. PROJECTS/TOUCH N GO/G2934/QUOTES'), { recursive: true });
+  await mkdir(join(root, '5. PROJECTS/G3249'), { recursive: true });
+  assert.equal(await findJobFolder(root, { code: 'G2934', name: 'Apple Crossing - AEC PH1 Test (TNG)' }), '5. PROJECTS/TOUCH N GO/G2934');
+  assert.equal(await findJobFolder(root, { code: 'G3249', name: 'SWA Cargo' }), '5. PROJECTS/G3249');
+});

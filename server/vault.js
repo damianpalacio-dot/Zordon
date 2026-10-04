@@ -109,15 +109,28 @@ export function folderScore(folderName, project) {
 }
 
 // Pick the best existing folder for a job: inside the projects folder first, then the OneDrive root.
+// Pick the best existing folder for a job: inside the projects folder first, then one level down in group folders
+// (e.g. "5. PROJECTS/TOUCH N GO/G2934"), then the OneDrive root.
 export async function findJobFolder(root, project) {
-  const places = [projectsDir(), ''].filter((p, i, a) => a.indexOf(p) === i);
+  const skip = (name) => name.startsWith('.') || name === CONTROL_DIR || /JOB TEMPLATE|^_|ARCHIVE/i.test(name);
+  const places = [{ dir: projectsDir(), rank: 0 }, { dir: '', rank: 2 }].filter((p, i, a) => a.findIndex((q) => q.dir === p.dir) === i);
   let best = null;
-  for (const [rank, place] of places.entries()) {
-    const entries = await readdir(vaultPath(root, place || '.'), { withFileTypes: true }).catch(() => []);
+  const consider = (path, name, rank) => {
+    const score = folderScore(name, project) - rank; // prefer shallower folders on ties
+    if (score > 0 && (!best || score > best.score)) best = { score, path };
+  };
+  for (const { dir, rank } of places) {
+    const entries = await readdir(vaultPath(root, dir || '.'), { withFileTypes: true }).catch(() => []);
     for (const e of entries) {
-      if (!e.isDirectory() || e.name.startsWith('.') || e.name === CONTROL_DIR || /JOB TEMPLATE/i.test(e.name)) continue;
-      const score = folderScore(e.name, project) - rank; // prefer the projects folder on ties
-      if (score > 0 && (!best || score > best.score)) best = { score, path: place ? `${place}/${e.name}` : e.name };
+      if (!e.isDirectory() || skip(e.name)) continue;
+      const path = dir ? `${dir}/${e.name}` : e.name;
+      consider(path, e.name, rank);
+      // A group folder (not itself a job): look at the jobs inside it.
+      if (dir && dir === projectsDir() && !/^G\d{4}\b/i.test(e.name)) {
+        for (const sub of await readdir(vaultPath(root, path), { withFileTypes: true }).catch(() => [])) {
+          if (sub.isDirectory() && !skip(sub.name) && /^G\d{4}\b/i.test(sub.name)) consider(`${path}/${sub.name}`, sub.name, 1);
+        }
+      }
     }
   }
   return best?.path || null;
