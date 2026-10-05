@@ -8,8 +8,12 @@ for /d %%D in ("%CD%\node" "%CD%\node-v*-win-x64" "%USERPROFILE%\node" "%USERPRO
   if exist "%%~D\node.exe" (set "PATH=%%~D;%PATH%" & goto :havenode)
   for /d %%E in ("%%~D\node-v*-win-x64") do if exist "%%~E\node.exe" (set "PATH=%%~E;%PATH%" & goto :havenode)
 )
-echo Node.js was not found.
-echo Download the Windows .zip from https://nodejs.org/en/download and unzip it into this Zordon folder.
+rem No Node.js anywhere: download the portable copy (no install, no admin rights) into this folder, once.
+echo Getting Node.js (one time, about 35 MB)...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $v='v22.20.0'; $z=Join-Path $env:TEMP 'zordon-node.zip'; Invoke-WebRequest \"https://nodejs.org/dist/$v/node-$v-win-x64.zip\" -OutFile $z -UseBasicParsing; Expand-Archive $z '%CD%' -Force"
+if exist "%CD%\node-v22.20.0-win-x64\node.exe" (set "PATH=%CD%\node-v22.20.0-win-x64;%PATH%" & goto :havenode)
+echo Could not download Node.js. Download the Windows .zip from https://nodejs.org/en/download
+echo and unzip it into this Zordon folder, then start Zordon again.
 pause
 exit /b 1
 :havenode
