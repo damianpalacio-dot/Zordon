@@ -420,3 +420,23 @@ test('VIP senders (Honor, Dawn, Greg, Tyson, Liz) always become at least High ta
   assert.equal(db.prepare("SELECT priority FROM tasks WHERE title LIKE 'Send Tyson%'").get().priority, 'high');
   assert.equal(applyVip({ sender: 'x@y.com', subject: 'hi' }, [], vipSenders(db)), false);
 });
+
+test('tasks are sorted into Damian\'s work buckets', async () => {
+  const { categorize } = await import('../server/categories.js');
+  const cases = {
+    "Review Liz's WIP (10/02): adjust red-highlighted budgets to cost": 'billing',
+    'Bill on the next pay app: CO 003 - Lighting': 'billing',
+    "Update Liz's pending & estimate change orders (10/02)": 'change_order',
+    'Get PCI 0045 T&M ticket signed': 'change_order',
+    'Follow up with the GC for approval of CO 003': 'change_order',
+    'Release equipment for Submittal 26 24 16 - Panelboards': 'equipment',
+    'Confirm ship date for switchgear': 'equipment',
+    'Review Franklin RFI #128': 'rfi',
+    "Review Telenet's structured cabling submittal": 'submittal',
+    'Deliver the ASF ERRCs training to the Owner': 'closeout',
+    'Fairfax BESS internal meeting': 'coordination',
+    'Review 3-week look-ahead vs baseline schedule': 'coordination',
+    'Add Grant Porter to all correspondence': 'tracking',
+  };
+  for (const [title, want] of Object.entries(cases)) assert.equal(categorize(title), want, title);
+});

@@ -1,4 +1,5 @@
 // Command-center logic: task health, dashboard, briefings and reminder drafts.
+import { categorize } from './categories.js';
 import { addDays, isoDate } from './db.js';
 import { ELECTRICAL_CRITICAL_RE } from './electrical.js';
 import { withSignOff, domainOf } from './quotes.js';
@@ -41,7 +42,7 @@ const TASK_SELECT = `SELECT t.*, p.name AS owner_name, p.color AS owner_color, p
 export function decorate(task, today) {
   const money = isMoney(task);
   const priority = task.status === 'done' ? task.priority : moneyPriority(task, today);
-  return { ...task, priority, money, electrical: isElectricalCritical(task), health: taskHealth(task, today), days_late: daysLate(task, today) };
+  return { ...task, category: task.category || categorize(task.title, task.description), priority, money, electrical: isElectricalCritical(task), health: taskHealth(task, today), days_late: daysLate(task, today) };
 }
 
 export function listTasks(db, filters = {}, today = isoDate()) {
@@ -55,6 +56,7 @@ export function listTasks(db, filters = {}, today = isoDate()) {
     ORDER BY (t.status = 'done'), t.due_date IS NULL, t.due_date, t.id`;
   let tasks = db.prepare(sql).all(...args).map((t) => decorate(t, today));
   if (filters.health) tasks = tasks.filter((t) => t.health === filters.health);
+  if (filters.category) tasks = tasks.filter((t) => t.category === filters.category);
   return tasks;
 }
 

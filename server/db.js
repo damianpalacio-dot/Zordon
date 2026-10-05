@@ -1,4 +1,5 @@
 // SQLite storage using Node's built-in driver (no native build step needed).
+import { categorize } from './categories.js';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -231,7 +232,7 @@ export function openDb(file = process.env.ZORDON_DB || 'data/zordon.db') {
 // Columns added after the first release; CREATE TABLE IF NOT EXISTS won't add them to older databases.
 const ADDED_COLUMNS = {
   projects: { lat: 'REAL', lon: 'REAL', short_name: 'TEXT', folder: 'TEXT' },
-  tasks: { estimate_hours: 'REAL' },
+  tasks: { estimate_hours: 'REAL', category: 'TEXT' },
   routines: { day_of_month: 'INTEGER' },
   emails: { message_id: 'TEXT' },
   packages: { compiled_at: 'TEXT' },
@@ -244,6 +245,10 @@ function migrate(db) {
   }
   // The hourly email check may see the same message twice; the message id keeps it to one import.
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_message_id ON emails(message_id) WHERE message_id IS NOT NULL');
+  // Tasks from before categories existed get one from their words.
+  const uncategorized = db.prepare('SELECT id, title, description FROM tasks WHERE category IS NULL').all();
+  const setCategory = db.prepare('UPDATE tasks SET category = ? WHERE id = ?');
+  for (const t of uncategorized) setCategory.run(categorize(t.title, t.description), t.id);
   // Demo data from older versions wasn't flagged; recognise it (demo team at example.com, demo job AGM-101)
   // so the real roster can replace it.
   const flagged = db.prepare("SELECT 1 FROM settings WHERE key = 'demo_data'").get();

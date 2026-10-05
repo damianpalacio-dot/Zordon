@@ -8,24 +8,29 @@ let zordon = null; // the 3D scene survives navigation so it doesn't rebuild eve
 
 // ---------------- Command Center ----------------
 async function commandView(el) {
-  const [d, focus] = await Promise.all([api('/api/dashboard'), api('/api/focus')]);
+  const [d, focus, allTasks] = await Promise.all([api('/api/dashboard'), api('/api/focus'), api('/api/tasks')]);
   const c = d.counts;
-  const alertText = { green: 'All systems nominal', yellow: 'Caution — attention needed', red: 'Ay-yi-yi! Red alert' }[d.alert];
+  const alertText = { green: 'Everything is on track', yellow: 'A few things need attention', red: 'Behind on some items' }[d.alert];
+  const openTasks = allTasks.filter((t) => t.status !== 'done');
+  const byType = (store.meta.categories || []).map((cat) => {
+    const list = openTasks.filter((t) => t.category === cat.key);
+    return { ...cat, open: list.length, late: list.filter((t) => t.health === 'delayed').length, soon: list.filter((t) => t.health === 'due_soon').length };
+  });
   const panel = (title, link, body) => `<section class="panel"><header><h2>${title}</h2>${link || ''}</header><div class="list">${body}</div></section>`;
   const sys = d.systems;
   const light = (name, on) => `<span class="sys ${on ? 'on' : ''}"><i></i>${esc(name)}</span>`;
   el.innerHTML = `
     <div class="hud-strip a-${d.alert}">
-      <span class="hud-title">⚡ COMMAND CENTER <b>// ONLINE</b></span>
+      <span class="hud-date">${fmtDate(d.today, { weekday: 'long', month: 'long', day: 'numeric' })}</span>
       <span class="hud-clock" id="clock"></span>
-      <span class="hud-date">${fmtDate(d.today, { weekday: 'long', month: 'long', day: 'numeric' }).toUpperCase()}</span>
       <span class="hud-weather" id="hud-weather"></span>
       <span class="spacer"></span>
-      ${light('ONEDRIVE', sys.onedrive)}${light('VOICE', sys.voice)}${light('CLAUDE', sys.ai)}${sys.connectors.map((x) => light(x.name.toUpperCase(), x.configured)).join('')}
-      <span class="hud-alert"><span class="lamp"></span>${esc(alertText.toUpperCase())}</span>
+      ${light('OneDrive', sys.onedrive)}${light('Voice', sys.voice)}${light('Claude', sys.ai)}${sys.connectors.map((x) => light(label(x.name), x.configured)).join('')}
+      <span class="hud-alert"><span class="lamp"></span>${esc(alertText)}</span>
     </div>
     <div class="page-head">
-      <div><h1>Command Center</h1></div>
+      <div><h1>Good ${new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 17 ? 'afternoon' : 'evening'}${store.people.find((p) => p.id === focus.person?.id)?.name ? `, ${esc(store.people.find((p) => p.id === focus.person?.id).name.split(' ')[0])}` : ''}</h1>
+        <p>${openTasks.length} open tasks · ${c.delayed} late · ${c.due_soon} due in the next 2 days</p></div>
       <div class="row">
         <button class="btn" id="speak">🔊 Hear briefing</button>
         <a class="btn primary" href="#/inbox">✉ Triage email</a>
@@ -39,6 +44,10 @@ async function commandView(el) {
           ${kpi('💲 CO & billing', c.money, 'money', '#/focus')}
           ${kpi('In my court', d.doccontrol.in_my_court.length, 'a-yellow', '#/doccontrol')}
         </div>
+        <section class="panel"><header><h2>Work by type</h2><a href="#/board" class="small">Board →</a></header>
+          <div class="type-grid">${byType.map((x) => `<a class="type-tile" href="#/board?category=${x.key}">
+            <span class="ic">${x.icon}</span><span class="nm">${esc(x.label)}</span><b>${x.open}</b>
+            ${x.late ? `<span class="pill h-delayed">${x.late} late</span>` : x.soon ? `<span class="pill h-due_soon">${x.soon} soon</span>` : ''}</a>`).join('')}</div></section>
         ${panel('⚑ Your nudges', '<a href="#/focus" class="small">Reality check →</a>',
           focus.nudges.length ? focus.nudges.slice(0, 6).map(nudgeRow).join('') : '<div class="empty">Nothing due in the next 3 days. Nice.</div>')}
         ${panel('📐 In your court', '<a href="#/doccontrol" class="small">RFIs & subs →</a>',
@@ -55,7 +64,7 @@ async function commandView(el) {
             <div class="readout r3">OPS <b>${c.open}</b></div>
             <div class="readout r4">ALERT <b class="a-${d.alert}" style="color:var(--c)">${d.alert.toUpperCase()}</b></div>
           </div>
-          <div class="label"><span class="dot a-${d.alert}"></span><b>ZORDON</b><span class="spacer"></span><span class="small muted" id="stage-hint">Move your mouse — he follows</span></div>
+          <div class="label"><span class="dot a-${d.alert}"></span><b>Zordon</b><span class="spacer"></span><span class="small muted" id="stage-hint">Move your mouse — he follows</span></div>
         </div>
         <section class="briefing alert-${d.alert}">
           <div class="alpha alpha-${d.alert} a-${d.alert}"><span class="lamp"></span>${esc(alertText)}</div>
@@ -72,7 +81,7 @@ async function commandView(el) {
           ${kpi('Open tasks', c.open, '', '#/board')}
           ${kpi('Done this week', c.done_this_week, 'h-done', '#/board?status=done')}
         </div>
-        ${panel('🌐 Viewing globe — delayed', '<a href="#/reminders" class="small">Remind →</a>',
+        ${panel('⏰ Running late', '<a href="#/reminders" class="small">Remind →</a>',
           d.delayed.length ? d.delayed.map(taskRow(d.today)).join('') : '<div class="empty">No delayed tasks.</div>')}
         ${panel('💲 Change orders & billing', '',
           d.money.length ? d.money.map(taskRow(d.today)).join('') : '<div class="empty">No open CO or billing items.</div>')}
@@ -278,58 +287,82 @@ async function focusView(el) {
 }
 
 // ---------------- Board (Monday-style) ----------------
+// Board: tasks broken out by type (RFIs, coordination, billing, change orders, submittals, closeout, equipment
+// release, tracking), or by project.
 async function boardView(el, params) {
   const filters = Object.fromEntries(params);
-  const qs = new URLSearchParams(Object.entries(filters).filter(([, v]) => v)).toString();
-  const tasks = await api(`/api/tasks${qs ? `?${qs}` : ''}`);
-  const { today, statuses, priorities } = store.meta;
+  const { category, by = 'type', ...serverFilters } = filters;
+  const qs = new URLSearchParams(Object.entries(serverFilters).filter(([, v]) => v)).toString();
+  const all = await api(`/api/tasks${qs ? `?${qs}` : ''}`);
+  const tasks = category ? all.filter((t) => t.category === category) : all;
+  const { today, statuses, priorities, categories = [] } = store.meta;
+  const catOf = (k) => categories.find((c) => c.key === k) || { key: k, label: label(k || 'tracking'), icon: '📋' };
+  const open = (t) => t.status !== 'done';
   const groups = new Map();
-  for (const p of store.projects.filter((p) => !filters.project_id || p.id === Number(filters.project_id))) groups.set(p.id, { project: p, tasks: [] });
-  for (const t of tasks) {
-    if (!groups.has(t.project_id)) groups.set(t.project_id, { project: { id: t.project_id, name: t.project_name || 'No project' }, tasks: [] });
-    groups.get(t.project_id).tasks.push(t);
+  if (by === 'project') {
+    for (const p of store.projects.filter((p) => !filters.project_id || p.id === Number(filters.project_id))) groups.set(`p${p.id}`, { title: p.name, sub: p.code || '', dot: p.health || 'green', project_id: p.id, tasks: [] });
+    for (const t of tasks) {
+      const key = `p${t.project_id}`;
+      if (!groups.has(key)) groups.set(key, { title: t.project_name || 'No project', sub: '', dot: 'green', project_id: t.project_id, tasks: [] });
+      groups.get(key).tasks.push(t);
+    }
+  } else {
+    for (const c of categories.filter((c) => !category || c.key === category)) groups.set(c.key, { title: `${c.icon} ${c.label}`, sub: '', category: c.key, tasks: [] });
+    for (const t of tasks) groups.get(t.category)?.tasks.push(t);
   }
   const set = (k, v) => {
     const next = new URLSearchParams(filters);
     if (v) next.set(k, v); else next.delete(k);
     location.hash = `#/board?${next}`;
   };
+  const counts = Object.fromEntries(categories.map((c) => [c.key, all.filter((t) => t.category === c.key && open(t)).length]));
 
   el.innerHTML = `
-    <div class="page-head"><div><h1>Board</h1><p>${tasks.length} task${tasks.length === 1 ? '' : 's'}</p></div>
-      <button class="btn primary" id="new-task">+ New task</button></div>
+    <div class="page-head"><div><h1>Board</h1><p>${tasks.filter(open).length} open · ${tasks.length} total</p></div>
+      <div class="row"><div class="seg">
+        <button class="${by === 'type' ? 'on' : ''}" data-by="type">By type</button><button class="${by === 'project' ? 'on' : ''}" data-by="project">By project</button></div>
+        <button class="btn primary" id="new-task">+ New task</button></div></div>
+    <div class="cat-tabs">
+      <button class="${!category ? 'on' : ''}" data-cat="">All <b>${all.filter(open).length}</b></button>
+      ${categories.map((c) => `<button class="${category === c.key ? 'on' : ''}" data-cat="${c.key}">${c.icon} ${esc(c.label)} <b>${counts[c.key]}</b></button>`).join('')}
+    </div>
     <div class="filters">
       <select data-f="project_id">${options(store.projects, filters.project_id, { empty: 'All projects' })}</select>
       <select data-f="owner_id">${options(store.people, filters.owner_id, { empty: 'Everyone' })}</select>
       <select data-f="status">${options(statuses, filters.status, { empty: 'Any status', value: (s) => s, text: label })}</select>
       <select data-f="health">${options(['delayed', 'due_soon', 'stuck', 'on_track', 'done'], filters.health, { empty: 'Any health', value: (s) => s, text: label })}</select>
       <input data-f="q" placeholder="Search…" value="${esc(filters.q || '')}">
-      ${qs ? '<a class="btn ghost" href="#/board">Clear</a>' : ''}
+      ${Object.keys(filters).some((k) => k !== 'by') ? `<a class="btn ghost" href="#/board${by === 'project' ? '?by=project' : ''}">Clear</a>` : ''}
     </div>
-    ${[...groups.values()].map(({ project, tasks: list }) => `
+    ${[...groups.values()].filter((g) => g.tasks.length || by === 'project' || category).map((g) => `
       <section class="group">
-        <header><span class="dot a-${project.health || 'green'}"></span><h3>${esc(project.name)}</h3>
-          <span class="small dim">${esc(project.code || '')} · ${list.length} task${list.length === 1 ? '' : 's'}</span></header>
+        <header>${g.dot ? `<span class="dot a-${g.dot}"></span>` : ''}<h3>${esc(g.title)}</h3>
+          <span class="small dim">${g.sub ? `${esc(g.sub)} · ` : ''}${g.tasks.filter(open).length} open</span></header>
         <div class="table-wrap"><table>
-          <thead><tr><th>Task</th><th>Owner</th><th>Status</th><th>Priority</th><th>Due</th><th>Timeline</th><th>Est.</th></tr></thead>
+          <thead><tr><th>Task</th><th>${by === 'project' ? 'Type' : 'Project'}</th><th>Owner</th><th>Status</th><th>Priority</th><th>Due</th><th>Timeline</th></tr></thead>
           <tbody>
-            ${list.map((t) => `
+            ${g.tasks.map((t) => `
               <tr data-id="${t.id}">
                 <td class="task h-${t.health}"><div class="t" data-open>${t.money ? '💲 ' : ''}${t.electrical ? '⚡ ' : ''}${esc(t.title)}</div>
                   <div class="small dim">${t.source !== 'manual' ? `from ${esc(t.source)} · ` : ''}${t.health === 'delayed' ? `<b style="color:var(--red)">${t.days_late}d late</b>` : label(t.health)}</div></td>
+                <td>${by === 'project'
+                  ? `<select data-k="category" class="cat-select">${categories.map((c) => `<option value="${c.key}" ${c.key === t.category ? 'selected' : ''}>${c.icon} ${esc(c.label)}</option>`).join('')}</select>`
+                  : `<span class="small">${esc(store.projects.find((p) => p.id === t.project_id)?.code || t.project_name || '—')}</span>
+                     <select data-k="category" class="cat-select mini" title="Move to another type">${categories.map((c) => `<option value="${c.key}" ${c.key === t.category ? 'selected' : ''}>${c.icon}</option>`).join('')}</select>`}</td>
                 <td><div class="row" style="gap:6px;flex-wrap:nowrap">${avatar(personById(t.owner_id))}
                   <select data-k="owner_id" style="max-width:140px">${options(store.people, t.owner_id, { empty: 'Unassigned' })}</select></div></td>
                 <td><select class="cell st-${t.status}" data-k="status">${options(statuses, t.status, { value: (s) => s, text: label })}</select></td>
                 <td><select class="cell pr-${t.priority}" data-k="priority">${options(priorities, t.priority, { value: (s) => s, text: label })}</select></td>
                 <td><input type="date" data-k="due_date" value="${esc(t.due_date || '')}" class="${t.health === 'delayed' ? 'late' : ''}"></td>
                 <td>${timeline(t, today)}</td>
-                <td class="small muted">${t.estimate_hours ? `${t.estimate_hours}h` : '—'}</td>
               </tr>`).join('')}
-            <tr class="add-row"><td colspan="7"><input placeholder="+ Add task to ${esc(project.name)} — press Enter" data-add="${project.id ?? ''}"></td></tr>
+            <tr class="add-row"><td colspan="7"><input placeholder="+ Add a task here — press Enter" data-add="${by === 'project' ? (g.project_id ?? '') : (filters.project_id || '')}" data-add-cat="${g.category || ''}"></td></tr>
           </tbody></table></div>
-      </section>`).join('') || '<div class="empty">No projects yet. Create one on the Projects page.</div>'}`;
+      </section>`).join('') || '<div class="empty">Nothing here. Try another filter, or add a task.</div>'}`;
 
   el.querySelectorAll('[data-f]').forEach((n) => n.addEventListener(n.tagName === 'INPUT' ? 'change' : 'input', () => set(n.dataset.f, n.value)));
+  el.querySelectorAll('[data-cat]').forEach((n) => n.addEventListener('click', () => set('category', n.dataset.cat)));
+  el.querySelectorAll('[data-by]').forEach((n) => n.addEventListener('click', () => set('by', n.dataset.by === 'type' ? '' : n.dataset.by)));
   el.querySelectorAll('tr[data-id]').forEach((tr) => {
     const id = Number(tr.dataset.id);
     tr.querySelector('[data-open]').addEventListener('click', () => openTask(id));
@@ -342,11 +375,11 @@ async function boardView(el, params) {
   el.querySelectorAll('[data-add]').forEach((input) => input.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' || !input.value.trim()) return;
     guard(async () => {
-      await api('/api/tasks', { method: 'POST', body: { title: input.value.trim(), project_id: input.dataset.add || null, owner_id: filters.owner_id || null } });
+      await api('/api/tasks', { method: 'POST', body: { title: input.value.trim(), project_id: input.dataset.add || null, owner_id: filters.owner_id || null, category: input.dataset.addCat || undefined } });
       render();
     });
   }));
-  el.querySelector('#new-task').addEventListener('click', () => openTask(null, { project_id: filters.project_id }));
+  el.querySelector('#new-task').addEventListener('click', () => openTask(null, { project_id: filters.project_id, category }));
 }
 
 function timeline(t, today) {
@@ -377,6 +410,7 @@ export async function openTask(id, defaults = {}) {
       <div class="form-grid">
         <label class="field">Project<select name="project_id">${options(store.projects, t.project_id, { empty: 'No project' })}</select></label>
         <label class="field">Owner<select name="owner_id">${options(store.people, t.owner_id, { empty: 'Unassigned' })}</select></label>
+        <label class="field">Type<select name="category">${(store.meta.categories || []).map((c) => `<option value="${c.key}" ${c.key === t.category ? 'selected' : ''}>${c.icon} ${esc(c.label)}</option>`).join('')}${t.category ? '' : '<option value="" selected>Pick for me</option>'}</select></label>
         <label class="field">Status<select name="status">${options(statuses, t.status, { value: (s) => s, text: label })}</select></label>
         <label class="field">Priority<select name="priority">${options(priorities, t.priority, { value: (s) => s, text: label })}</select></label>
         <label class="field">Start<input type="date" name="start_date" value="${esc(t.start_date || '')}"></label>

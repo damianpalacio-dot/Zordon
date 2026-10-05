@@ -18,6 +18,7 @@ import { oneDriveStatus, listFolder, openOnComputer } from './onedrive.js';
 import { STAGES, packageType, stageFor, ensurePackage, coSubfolder, coLabel, specKey, recordPackage, setStage, listPackages } from './packages.js';
 import { template, loadTemplate, copyTemplate, templateDir } from './template.js';
 import { compileCo } from './compile.js';
+import { TASK_CATEGORIES, CATEGORY_KEYS, categorize } from './categories.js';
 import { findWorkbook, readWorkbook, readSheet } from './workbook.js';
 import { leadTime, createElectricalPlan, LEAD_TIMES } from './electrical.js';
 import { loadBuiltinSkills, listSkills, saveSkill, createJob, listJobs, syncControl, importJobResult, filingRules,
@@ -62,8 +63,10 @@ function mustExist(row, what) {
 }
 
 function taskFields(body, { creating }) {
-  const f = pick(body, ['project_id', 'title', 'description', 'owner_id', 'status', 'priority', 'start_date', 'due_date', 'source', 'source_ref']);
+  const f = pick(body, ['project_id', 'title', 'description', 'owner_id', 'status', 'priority', 'start_date', 'due_date', 'source', 'source_ref', 'category']);
   if (creating) required(f.title, 'title');
+  if ('category' in f && !CATEGORY_KEYS.includes(f.category)) delete f.category;
+  if (creating && !f.category) f.category = categorize(f.title, f.description);
   oneOf(f.status, STATUSES, 'status');
   oneOf(f.priority, PRIORITIES, 'priority');
   for (const k of ['start_date', 'due_date']) if (k in f) f[k] = dateOrNull(f[k], k);
@@ -506,7 +509,7 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
     }],
     ['POST', '/api/voice/goodbye', () => voice.goodbye()],
     ['POST', '/api/voice/say', ({ body }) => ({ spoken: say(required(body.text, 'text')) })],
-    ['GET', '/api/meta', () => ({ statuses: STATUSES, priorities: PRIORITIES, colors: RANGER_COLORS, ai: aiEnabled(), today: today(),
+    ['GET', '/api/meta', () => ({ statuses: STATUSES, priorities: PRIORITIES, colors: RANGER_COLORS, categories: TASK_CATEGORIES, ai: aiEnabled(), today: today(),
       demo: db.prepare("SELECT value FROM settings WHERE key = 'demo_data'").get()?.value === 'true', vault_set: Boolean(process.env.ZORDON_VAULT), vault: process.env.ZORDON_VAULT || null, roster_error: rosterStatus.error })],
     ['GET', '/api/dashboard', () => {
       runRoutines(db, today());

@@ -8,7 +8,7 @@ A project coordination hub for a construction PM, the APM, the project engineer 
 |---|---|
 | **Command Center** | 3D Zordon with a live HUD: alert level, clock, system lights, delayed work, change orders & billing, RFIs/submittals in your court, jobsite weather, Rangers (team) status, projects, meetings. Spoken greeting and briefing. |
 | **My Focus** | Nudges 3 days, 1 day and the day something is due, plus a **reality check**: hours due vs your real focus hours, projected finish dates at your pace, and your historical on-time rate ("you usually finish 2 days late, so add 2 days when you commit"). |
-| **Board** | Monday.com-style board grouped by project: owner, status, priority, due date, timeline, estimate. Inline editing, filters, task drawer with history. |
+| **Board** | Tasks broken out by type: RFIs, Coordination, Billing, Change orders, Submittals, Closeout, Equipment release, Tracking (Zordon sorts each new task from its words; change it anytime), or by project. Owner, status, priority, due date, timeline; inline editing, filters, task drawer with history. |
 | **Projects** | Portfolio cards with progress and health. |
 | **RFIs & Submittals** | Watchlist for Div 26/27/28, HVAC, plumbing, millwork, special glazing and framing. Pulls from Procore, Autodesk (ACC / Forma) and their notification emails. Anything in your court becomes a task on your list. |
 | **Schedule & Equipment** | 3-week look-ahead vs baseline (CSV import from P6 / MS Project), equipment release log (release-by = need date − lead time − buffer), and recurring reminders (weekly look-ahead review, monthly pay app, weekly CO log review). |
@@ -202,7 +202,7 @@ Zordon is built to run on your own computer. Before you put it on a server or op
 
 ```bash
 npm run dev    # restart on file changes
-npm test       # 55 tests: parsing, scheduling, doc control, naming, packages, archive, API
+npm test       # 56 tests: parsing, scheduling, doc control, naming, packages, archive, API
 ```
 
 - `server/`: zero-framework Node HTTP server. SQLite via Node's built-in `node:sqlite` (`data/zordon.db`).

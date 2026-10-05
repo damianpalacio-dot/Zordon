@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice">
+  <!-- Zordon's command center, quietly: the energy tube in the middle, the viewing globe, the dome and the consoles. -->
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0c1630"/>
+      <stop offset=".55" stop-color="#080e1f"/>
+      <stop offset="1" stop-color="#05070f"/>
+    </linearGradient>
+    <linearGradient id="tube" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#7fc4ff" stop-opacity="0"/>
+      <stop offset=".18" stop-color="#7fc4ff" stop-opacity=".10"/>
+      <stop offset=".5" stop-color="#cfe8ff" stop-opacity=".26"/>
+      <stop offset=".82" stop-color="#7fc4ff" stop-opacity=".10"/>
+      <stop offset="1" stop-color="#7fc4ff" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="halo" cx=".5" cy=".38" r=".5">
+      <stop offset="0" stop-color="#5aa8ff" stop-opacity=".32"/>
+      <stop offset=".6" stop-color="#2a5fb0" stop-opacity=".08"/>
+      <stop offset="1" stop-color="#2a5fb0" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="face" cx=".5" cy=".5" r=".5">
+      <stop offset="0" stop-color="#e6f3ff" stop-opacity=".16"/>
+      <stop offset=".7" stop-color="#9fd0ff" stop-opacity=".05"/>
+      <stop offset="1" stop-color="#9fd0ff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="globe" cx=".42" cy=".38" r=".62">
+      <stop offset="0" stop-color="#1d3f74" stop-opacity=".55"/>
+      <stop offset=".7" stop-color="#0d1e3d" stop-opacity=".45"/>
+      <stop offset="1" stop-color="#081227" stop-opacity=".2"/>
+    </radialGradient>
+    <linearGradient id="desk" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#16233d"/>
+      <stop offset="1" stop-color="#070b16"/>
+    </linearGradient>
+    <filter id="soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="18"/></filter>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="3"/></filter>
+  </defs>
+
+  <rect width="1920" height="1080" fill="url(#sky)"/>
+  <ellipse cx="960" cy="380" rx="760" ry="520" fill="url(#halo)"/>
+
+  <!-- Dome ribs -->
+  <g fill="none" stroke="#6fa8ff" stroke-opacity=".07" stroke-width="2">
+    <ellipse cx="960" cy="40" rx="900" ry="300"/>
+    <ellipse cx="960" cy="40" rx="700" ry="230"/>
+    <ellipse cx="960" cy="40" rx="500" ry="160"/>
+    <path d="M960 -260 L960 340 M560 -180 L780 330 M1360 -180 L1140 330 M200 0 L640 360 M1720 0 L1280 360"/>
+  </g>
+
+  <!-- The energy tube -->
+  <g>
+    <rect x="850" y="40" width="220" height="760" fill="#7fc4ff" opacity=".06" filter="url(#soft)"/>
+    <rect x="880" y="70" width="160" height="720" fill="url(#tube)">
+      <animate attributeName="opacity" values=".85;1;.85" dur="6s" repeatCount="indefinite"/>
+    </rect>
+    <rect x="958" y="70" width="4" height="720" fill="#e8f4ff" opacity=".18" filter="url(#glow)"/>
+    <ellipse cx="960" cy="300" rx="62" ry="86" fill="url(#face)"/>
+    <g fill="none" stroke="#a9d6ff" stroke-width="2">
+      <ellipse cx="960" cy="70" rx="82" ry="16" stroke-opacity=".35"/>
+      <ellipse cx="960" cy="790" rx="82" ry="16" stroke-opacity=".35"/>
+      <ellipse cx="960" cy="790" rx="120" ry="26" stroke-opacity=".12"/>
+    </g>
+    <g fill="#bfe2ff" opacity=".5">
+      <circle cx="930" cy="640" r="1.6"><animate attributeName="cy" values="760;120" dur="9s" repeatCount="indefinite"/></circle>
+      <circle cx="990" cy="520" r="1.2"><animate attributeName="cy" values="760;120" dur="12s" begin="-4s" repeatCount="indefinite"/></circle>
+      <circle cx="960" cy="420" r="1.4"><animate attributeName="cy" values="760;120" dur="10s" begin="-7s" repeatCount="indefinite"/></circle>
+    </g>
+  </g>
+
+  <!-- Viewing globe (left) -->
+  <g>
+    <circle cx="300" cy="380" r="170" fill="url(#globe)"/>
+    <g fill="none" stroke="#8cc4ff" stroke-opacity=".18" stroke-width="1.5">
+      <circle cx="300" cy="380" r="170"/>
+      <circle cx="300" cy="380" r="188" stroke-opacity=".08"/>
+      <ellipse cx="300" cy="380" rx="170" ry="52"/>
+      <ellipse cx="300" cy="380" rx="70" ry="170"/>
+    </g>
+  </g>
+
+  <!-- Monitor wall (right) -->
+  <g fill="#0d1a33" fill-opacity=".55" stroke="#8cc4ff" stroke-opacity=".12">
+    <rect x="1490" y="250" width="300" height="180" rx="14"/>
+    <rect x="1530" y="460" width="220" height="120" rx="12"/>
+  </g>
+  <g stroke="#8cc4ff" stroke-opacity=".14" stroke-width="2">
+    <path d="M1510 300 h180 M1510 330 h240 M1510 360 h140 M1510 390 h200"/>
+  </g>
+
+  <!-- Consoles along the floor -->
+  <path d="M-40 1080 L-40 900 Q960 760 1960 900 L1960 1080 Z" fill="url(#desk)"/>
+  <path d="M-40 900 Q960 760 1960 900" fill="none" stroke="#7fb8ff" stroke-opacity=".22" stroke-width="2"/>
+  <g>
+    <g fill="#e53935" opacity=".55"><circle cx="180" cy="905" r="4"/><circle cx="1640" cy="880" r="4"><animate attributeName="opacity" values=".2;1;.2" dur="2.4s" repeatCount="indefinite"/></circle></g>
+    <g fill="#1e88e5" opacity=".6"><circle cx="300" cy="886" r="4"><animate attributeName="opacity" values="1;.3;1" dur="3.1s" repeatCount="indefinite"/></circle><circle cx="1500" cy="866" r="4"/></g>
+    <g fill="#fdd835" opacity=".55"><circle cx="420" cy="870" r="4"/><circle cx="1380" cy="855" r="4"><animate attributeName="opacity" values=".3;1;.3" dur="1.8s" repeatCount="indefinite"/></circle></g>
+    <g fill="#43a047" opacity=".55"><circle cx="560" cy="853" r="4"><animate attributeName="opacity" values="1;.25;1" dur="2.7s" repeatCount="indefinite"/></circle><circle cx="1240" cy="842" r="4"/></g>
+    <g fill="#ec6fb4" opacity=".5"><circle cx="700" cy="840" r="4"/><circle cx="1100" cy="834" r="4"><animate attributeName="opacity" values=".25;1;.25" dur="3.6s" repeatCount="indefinite"/></circle></g>
+    <g fill="#9cc8ff" opacity=".35">
+      <rect x="230" y="930" width="120" height="6" rx="3"/><rect x="480" y="905" width="140" height="6" rx="3"/>
+      <rect x="1300" y="900" width="140" height="6" rx="3"/><rect x="1560" y="925" width="120" height="6" rx="3"/>
+    </g>
+  </g>
+</svg>
