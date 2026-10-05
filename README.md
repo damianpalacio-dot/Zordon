@@ -45,6 +45,10 @@ When Zordon starts, he says *"Good morning, Damian. Make today a day better than
 team and jobs automatically. To wipe the board on this computer and start over, double-click
 `scripts/reset-zordon.bat` (it keeps a backup in `data/backups` and never touches OneDrive).
 
+**Two computers, one board:** run Zordon at work and at home and they share the same board through OneDrive
+(`Zordon/board`, one small file per task). Changes show up on the other computer within about 20 seconds; if the
+same task is changed on both, the newest change wins. Recurring reminders appear once. Demo data is never shared.
+
 ### Updating
 
 When Claude pushes changes, double-click `scripts/update-zordon.bat` (Mac: `update-zordon.command`). On Windows it
@@ -202,7 +206,7 @@ Zordon is built to run on your own computer. Before you put it on a server or op
 
 ```bash
 npm run dev    # restart on file changes
-npm test       # 56 tests: parsing, scheduling, doc control, naming, packages, archive, API
+npm test       # 60 tests: parsing, scheduling, doc control, naming, packages, archive, API
 ```
 
 - `server/`: zero-framework Node HTTP server. SQLite via Node's built-in `node:sqlite` (`data/zordon.db`).

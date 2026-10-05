@@ -25,7 +25,7 @@ async function commandView(el) {
       <span class="hud-clock" id="clock"></span>
       <span class="hud-weather" id="hud-weather"></span>
       <span class="spacer"></span>
-      ${light('OneDrive', sys.onedrive)}${light('Voice', sys.voice)}${light('Claude', sys.ai)}${sys.connectors.map((x) => light(label(x.name), x.configured)).join('')}
+      ${light('OneDrive', sys.onedrive)}${light('Shared board', sys.onedrive && !sys.board?.error)}${light('Voice', sys.voice)}${light('Claude', sys.ai)}${sys.connectors.map((x) => light(label(x.name), x.configured)).join('')}
       <span class="hud-alert"><span class="lamp"></span>${esc(alertText)}</span>
     </div>
     <div class="page-head">

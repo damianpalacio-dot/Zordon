@@ -1,5 +1,6 @@
 // SQLite storage using Node's built-in driver (no native build step needed).
 import { categorize } from './categories.js';
+import { installBoardSync } from './boardsync.js';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -232,7 +233,7 @@ export function openDb(file = process.env.ZORDON_DB || 'data/zordon.db') {
 // Columns added after the first release; CREATE TABLE IF NOT EXISTS won't add them to older databases.
 const ADDED_COLUMNS = {
   projects: { lat: 'REAL', lon: 'REAL', short_name: 'TEXT', folder: 'TEXT' },
-  tasks: { estimate_hours: 'REAL', category: 'TEXT' },
+  tasks: { estimate_hours: 'REAL', category: 'TEXT', uid: 'TEXT', rev: 'TEXT' },
   routines: { day_of_month: 'INTEGER' },
   emails: { message_id: 'TEXT' },
   packages: { compiled_at: 'TEXT' },
@@ -245,6 +246,7 @@ function migrate(db) {
   }
   // The hourly email check may see the same message twice; the message id keeps it to one import.
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_message_id ON emails(message_id) WHERE message_id IS NOT NULL');
+  installBoardSync(db);
   // Tasks from before categories existed get one from their words.
   const uncategorized = db.prepare('SELECT id, title, description FROM tasks WHERE category IS NULL').all();
   const setCategory = db.prepare('UPDATE tasks SET category = ? WHERE id = ?');
@@ -262,9 +264,11 @@ function migrate(db) {
 export function clearDemo(db) {
   if (db.prepare("SELECT value FROM settings WHERE key = 'demo_data'").get()?.value !== 'true') return false;
   db.exec('PRAGMA foreign_keys = OFF');
+  db.exec('UPDATE sync_state SET applying = 1'); // removing the demo is not a change to share
   for (const t of ['task_updates', 'reminders', 'documents', 'tracked_items', 'packages', 'schedule_activities', 'equipment', 'routines',
     'meetings', 'emails', 'tasks', 'claude_jobs', 'proposals', 'projects', 'people']) db.exec(`DELETE FROM ${t}`);
   db.exec("DELETE FROM settings WHERE key IN ('demo_data', 'me_person_id', 'vip_senders')");
+  db.exec('DELETE FROM sync_dirty; UPDATE sync_state SET applying = 0');
   db.exec('PRAGMA foreign_keys = ON');
   return true;
 }

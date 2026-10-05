@@ -192,11 +192,14 @@ export function runRoutines(db, today = isoDate(), leadDays = 3) {
       if (r.last_due && r.last_due >= next) continue;
       if (r.last_due && r.every_weeks > 1 && days(next, r.last_due) < r.every_weeks * 7) continue;
     }
-    const id = db.prepare(`INSERT INTO tasks (project_id, title, description, owner_id, priority, due_date, source, source_ref, estimate_hours)
-      VALUES (?, ?, ?, ?, ?, ?, 'routine', ?, ?)`)
-      .run(r.project_id, r.title, r.description, r.owner_id, moneyPriority({ ...r, priority: 'medium', due_date: next }, today), next, r.id, r.estimate_hours).lastInsertRowid;
+    // Every computer runs the same reminders: the same reminder on the same day gets the same id, so the shared
+    // board shows it once.
+    const uid = `r-${String(r.title).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50)}-${next}`;
+    const res = db.prepare(`INSERT OR IGNORE INTO tasks (project_id, title, description, owner_id, priority, due_date, source, source_ref, estimate_hours, uid)
+      VALUES (?, ?, ?, ?, ?, ?, 'routine', ?, ?, ?)`)
+      .run(r.project_id, r.title, r.description, r.owner_id, moneyPriority({ ...r, priority: 'medium', due_date: next }, today), next, r.id, r.estimate_hours, uid);
     db.prepare('UPDATE routines SET last_due = ? WHERE id = ?').run(next, r.id);
-    created.push(Number(id));
+    if (res.changes) created.push(Number(res.lastInsertRowid));
   }
   return created;
 }

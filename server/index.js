@@ -19,6 +19,7 @@ import { STAGES, packageType, stageFor, ensurePackage, coSubfolder, coLabel, spe
 import { template, loadTemplate, copyTemplate, templateDir } from './template.js';
 import { compileCo } from './compile.js';
 import { TASK_CATEGORIES, CATEGORY_KEYS, categorize } from './categories.js';
+import { syncBoard, shareExistingTasks, syncStatus, BOARD_DIR } from './boardsync.js';
 import { findWorkbook, readWorkbook, readSheet } from './workbook.js';
 import { leadTime, createElectricalPlan, LEAD_TIMES } from './electrical.js';
 import { loadBuiltinSkills, listSkills, saveSkill, createJob, listJobs, syncControl, importJobResult, filingRules,
@@ -517,7 +518,7 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
         ...dashboard(db, today()),
         doccontrol: docControlSummary(db, today()),
         focus_person_id: mePersonId(db),
-        systems: { ai: aiEnabled(), voice: voice.enabled(), connectors: connectorStatus(), onedrive: Boolean(process.env.ZORDON_VAULT) && vaultRoot === process.env.ZORDON_VAULT },
+        systems: { ai: aiEnabled(), voice: voice.enabled(), connectors: connectorStatus(), board: { ...syncStatus }, onedrive: Boolean(process.env.ZORDON_VAULT) && vaultRoot === process.env.ZORDON_VAULT },
       };
     }],
 
@@ -1064,5 +1065,10 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     if (db.prepare("SELECT value FROM settings WHERE key = 'demo_data'").get()?.value !== 'true') return;
     if (await seedFromRoster(db, vaultRoot)) { console.log('Loaded your team and jobs from Zordon/zordon-roster.json.'); roster(); }
   }, 60_000).unref();
+  // One board on every computer that runs Zordon (via OneDrive/Zordon/board). The first run shares what's here.
+  if (!getSetting(db, 'board_shared', false)) { shareExistingTasks(db); setSetting(db, 'board_shared', true); }
+  const board = () => syncBoard(db, vaultRoot).then((r) => (r.imported || r.exported) && console.log(`[board] ${r.imported} in, ${r.exported} out`));
+  board();
+  setInterval(board, 20_000).unref();
   setInterval(() => processInbox(db, vaultRoot).then((f) => f.length && console.log(`[vault] filed ${f.length} file(s) from _Inbox`)), 60_000).unref();
 }
