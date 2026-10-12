@@ -81,7 +81,11 @@ function toIso(s, today) {
 }
 
 function findProject(db, item) {
-  if (item.project_id) return Number(item.project_id);
+  if (item.project_id && /^\d+$/.test(String(item.project_id))) return Number(item.project_id);
+  if (item.project_id) { // a job number such as G2707
+    const hit = db.prepare('SELECT id FROM projects WHERE lower(code) = lower(?)').get(String(item.project_id));
+    if (hit) return hit.id;
+  }
   const projects = db.prepare('SELECT id, name, code FROM projects').all();
   const hay = `${item.project_hint || ''} ${item.project_name || ''} ${item.title || ''}`.toLowerCase();
   const byExternal = item.external_project_id

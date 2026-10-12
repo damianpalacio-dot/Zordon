@@ -8,30 +8,30 @@ import { homedir } from 'node:os';
 import { isoDate } from './db.js';
 import { aiEnabled } from './intel.js';
 
-// GEC2 Job Start-Up folder template (OneDrive "_ _ JOB START_UP FOLDER").
+// GEC2 job folders. These are the defaults; the real list comes from OneDrive
+// "5. PROJECTS/0. JOB TEMPLATE - DO NOT DELETE" (see template.js), which updates these in place.
 export const JOB_TEMPLATE = [
   '01 COST CONTROL', '02 BIM', '03 CONSTRUCTION SET', '04 DESIGN CHANGES', '05 SPECIFICATIONS', '06 SCHEDULE', '07 RFIS',
-  '08 JOB SITE PHOTOS', '09 PROCUREMENT LOG', '10 CORRESPONDENCE', '11 CLOSEOUTS', '12 TEMPLATES', '13 SAFETY', '14 SUBMITTALS', '15 PREFAB',
+  '08 JOB SITE PHOTOS', '09 PROCUREMENT LOG', '10 CORRESPONDENCE', '11 CLOSEOUTS', '12 TEMPLATES', '13 SAFETY', '14 SUBMITTALS',
 ];
 
-// Document types, checked in order: [category, pattern, label used in the file name, template folder].
+// Document types, checked in order: [category, pattern, label used in the file name, default folder].
 const TYPES = [
   ['RFI', /\brfis?\b|request for information/i, 'RFI', '07 RFIS'],
-  ['COR', /change order|\bcor\b|\bpcos?\b|\bpci\b|\bco\s?#?\d|change request|\brfc\b|t&m|time and material|pricing/i, 'COR', '01 COST CONTROL/04 CHANGE ORDERS'],
+  ['COR', /change order|\bcor\b|\bpcos?\b|\bpci\b|\bco\s?#?\d|change request|\brfc\b|t&m|time and material|pricing/i, 'CO', '01 COST CONTROL/04 CHANGE ORDERS'],
   ['Pay App', /pay ?app|payment application|billing|invoice|\bsov\b|schedule of values|g70[23]|lien waiver|retention|retainage/i, 'PAY APP', '01 COST CONTROL/05 PAYMENT APPLICATIONS (MONTHLY BILLING)'],
-  ['Purchase Order', /purchase order|\bpo\s?#?\s?\d|\bloi\b|letter of intent|\bntp\b|notice to proceed/i, 'PO', '01 COST CONTROL/06 PURCHASE ORDERS'],
   ['Submittal', /submittal|shop drawing|product data|cut sheet|\bsub[- ]?\d/i, 'SUBMITTAL', '14 SUBMITTALS'],
   ['Design Change', /bulletin|\basi\b|\bccd\b|\bdcn\b|design change|ifc set change|revision \d|addend/i, 'DESIGN CHANGE', '04 DESIGN CHANGES'],
-  ['Procurement', /\bmrf\b|material request|\bquote\b|quotation|release letter|delivery ticket|packing slip|\bbom\b/i, 'PROCUREMENT', '09 PROCUREMENT LOG'],
+  ['Purchase Order', /purchase order|\bpo\s?#?\s?\d|\bquote\b|quotation|subcontract agreement|\bloi\b|letter of intent|\bntp\b|notice to proceed/i, 'PO', '01 COST CONTROL/06 PURCHASE ORDERS'],
+  ['Procurement', /\bmrf\b|material request|release letter|delivery ticket|packing slip|\bbom\b|procurement log/i, 'PROCUREMENT', '09 PROCUREMENT LOG'],
   ['Contract', /subcontract|contract|agreement|exhibit [a-z]\b|scope of work|\bsow\b|insurance cert|\bcoi\b|bond/i, 'CONTRACT', '01 COST CONTROL/02 CONTRACT DOCUMENTS'],
-  ['Proposal', /proposal|estimate|\bbid\b|takeoff|take-off/i, 'PROPOSAL', '01 COST CONTROL'],
+  ['Proposal', /proposal|estimate|\bbid\b|takeoff|take-off/i, 'ESTIMATE', '01 COST CONTROL/01 ORIGINAL ESTIMATE'],
   ['Schedule', /schedule|look-?ahead|gantt|\bcpm\b|milestone|\bp6\b/i, 'SCHEDULE', '06 SCHEDULE'],
   ['Specification', /specification|\bspecs?\b|section \d{2}\s?\d{2}/i, 'SPEC', '05 SPECIFICATIONS'],
   ['BIM', /\bbim\b|revit|navisworks|clash|\.(rvt|nwd|nwc|ifc)$/i, 'BIM', '02 BIM'],
   ['Drawing', /drawing|\bdwg\b|\bplans?\b|sheet [a-z]+-?\d|single.?line|\bsld\b|elevation|layout|\.(dwg|dxf)$/i, 'DWG', '03 CONSTRUCTION SET'],
   ['Closeout', /closeout|close-out|o&m|operation and maintenance|as-?built|warranty|attic stock|training/i, 'CLOSEOUT', '11 CLOSEOUTS'],
   ['Safety', /safety|\bjha\b|\bjsa\b|toolbox|incident|osha|\bppe\b|energy control|lockout/i, 'SAFETY', '13 SAFETY'],
-  ['Prefab', /prefab|pre-fab|assembly drawing|kitting/i, 'PREFAB', '15 PREFAB'],
   ['Photo', /\.(jpe?g|png|heic|webp)$|photo|picture/i, 'PHOTO', '08 JOB SITE PHOTOS'],
   ['Inspection', /inspection|permit|test report|\bneta\b|punch ?list|certificate/i, 'INSPECTION', '10 CORRESPONDENCE'],
   ['Meeting Minutes', /minutes|meeting notes|\boac\b|agenda/i, 'MINUTES', '10 CORRESPONDENCE'],
@@ -81,7 +81,9 @@ export function projectFolder(project) {
   if (!project) return UNFILED;
   // A job whose folder isn't named after its number (e.g. "5. PROJECTS/LAUSD 32ND ST").
   if (project.folder) return String(project.folder).replace(/^\/+|\/+$/g, '');
-  const job = cleanName(project.code || project.name || `Project ${project.id}`, 40);
+  const job = isJobNumber(project.code) && project.name && !/name not found/i.test(project.name)
+    ? cleanName(`${project.code.toUpperCase()} - ${titleCase(project.name)}`, 90)
+    : cleanName(project.code || project.name || `Project ${project.id}`, 40);
   return projectsDir() ? `${projectsDir()}/${job}` : job;
 }
 
@@ -107,15 +109,28 @@ export function folderScore(folderName, project) {
 }
 
 // Pick the best existing folder for a job: inside the projects folder first, then the OneDrive root.
+// Pick the best existing folder for a job: inside the projects folder first, then one level down in group folders
+// (e.g. "5. PROJECTS/TOUCH N GO/G2934"), then the OneDrive root.
 export async function findJobFolder(root, project) {
-  const places = [projectsDir(), ''].filter((p, i, a) => a.indexOf(p) === i);
+  const skip = (name) => name.startsWith('.') || name === CONTROL_DIR || /JOB TEMPLATE|^_|ARCHIVE/i.test(name);
+  const places = [{ dir: projectsDir(), rank: 0 }, { dir: '', rank: 2 }].filter((p, i, a) => a.findIndex((q) => q.dir === p.dir) === i);
   let best = null;
-  for (const [rank, place] of places.entries()) {
-    const entries = await readdir(vaultPath(root, place || '.'), { withFileTypes: true }).catch(() => []);
+  const consider = (path, name, rank) => {
+    const score = folderScore(name, project) - rank; // prefer shallower folders on ties
+    if (score > 0 && (!best || score > best.score)) best = { score, path };
+  };
+  for (const { dir, rank } of places) {
+    const entries = await readdir(vaultPath(root, dir || '.'), { withFileTypes: true }).catch(() => []);
     for (const e of entries) {
-      if (!e.isDirectory() || e.name.startsWith('.') || e.name === CONTROL_DIR) continue;
-      const score = folderScore(e.name, project) - rank; // prefer the projects folder on ties
-      if (score > 0 && (!best || score > best.score)) best = { score, path: place ? `${place}/${e.name}` : e.name };
+      if (!e.isDirectory() || skip(e.name)) continue;
+      const path = dir ? `${dir}/${e.name}` : e.name;
+      consider(path, e.name, rank);
+      // A group folder (not itself a job): look at the jobs inside it.
+      if (dir && dir === projectsDir() && !/^G\d{4}\b/i.test(e.name)) {
+        for (const sub of await readdir(vaultPath(root, path), { withFileTypes: true }).catch(() => [])) {
+          if (sub.isDirectory() && !skip(sub.name) && /^G\d{4}\b/i.test(sub.name)) consider(`${path}/${sub.name}`, sub.name, 1);
+        }
+      }
     }
   }
   return best?.path || null;
@@ -127,9 +142,10 @@ const GENERIC = new Set(['GEC2', 'ELECTRICAL', 'ELEC', 'SUB', 'SUBMITTAL', 'SUBM
   'PDF', 'REV', 'REVISION', 'COPY', 'FINAL', 'DRAFT', 'NEW', 'OLD', 'FILES', 'DOCS', 'DOCUMENTS', 'MISC', 'GENERAL', 'LEVEL', 'SET']);
 const specKeys = (t) => [...String(t).matchAll(/\b(\d{2})\s?(\d{2})\s?(\d{2})\b/g)].map((m) => m.slice(1).join(''));
 
+const stem = (w) => (w.length > 4 ? w.replace(/(IES|ES|S)$/, (m) => (m === 'IES' ? 'Y' : '')) : w);
 export function subfolderScore(folderName, hay) {
-  const ht = new Set(tokens(hay));
-  const strong = tokens(folderName).filter((w) => !GENERIC.has(w) && (w.length >= 4 || /^[A-Z]{3}$/.test(w)) && ht.has(w));
+  const ht = new Set(tokens(hay).map(stem));
+  const strong = tokens(folderName).filter((w) => !GENERIC.has(w) && (w.length >= 3) && ht.has(stem(w)));
   const specs = specKeys(folderName).filter((k) => specKeys(hay).includes(k));
   return strong.length + specs.length * 3;
 }
@@ -190,7 +206,7 @@ export function describe(title, category, project) {
   const typeWords = [TYPE_LABEL[category], category, ...(category === 'COR' ? ['PCO', 'PCI', 'CO', 'Change Order'] : []), ...(category === 'Submittal' ? ['Sub'] : [])];
   t = t.replace(new RegExp(`^(${typeWords.map(escapeRe).join('|')})\\b[\\s:#-]*`, 'i'), '');
   let number = '';
-  const m = t.match(/^#?\s*(\d[\w.]*(?:-\d[\w.]*)?)\b[\s:-]*/);
+  const m = t.match(/^#?\s*(\d{2} \d{2} ?\d{2}\b|\d[\w.]*(?:-\d[\w.]*)?)\b[\s:-]*/); // a spec section ("28 31 00") stays whole
   if (m) { number = m[1]; t = t.slice(m[0].length); }
   t = t.replace(/\s+[-–—]\s+[-–—]\s+/g, ' - ').replace(/^[\s\-–—_:]+|[\s\-–—_:]+$/g, '');
   return { number, desc: titleCase(t) };
@@ -200,7 +216,7 @@ export function finalize({ title, category, project, ext, today }) {
   const { number, desc: d } = describe(title, category, project);
   const label = `${TYPE_LABEL[category] || 'DOC'}${number ? ` ${number}` : ''}`;
   const desc = d || titleCase(category);
-  const date = usDate(today);
+  const date = today; // YYYY-MM-DD so files sort correctly (GEC2 job template rule)
   const prefix = project ? `${cleanName(project.code || project.name, 40)}${shortName(project) ? `_${shortName(project)}` : ''} - ` : '';
   const sub = CATEGORY_FOLDERS[category] || '';
   const folder = project ? [projectFolder(project), sub].filter(Boolean).join('/') : UNFILED;
@@ -209,7 +225,7 @@ export function finalize({ title, category, project, ext, today }) {
     category,
     project_id: project?.id ?? null,
     folder,
-    filename: `${prefix}${label} - ${desc} (${date})${ext || ''}`,
+    filename: `${prefix}${label} - ${desc} - ${date}${ext || ''}`,
   };
 }
 
@@ -316,9 +332,15 @@ export async function detectVault(env = process.env, home = homedir()) {
   for (const e of await readdir(home, { withFileTypes: true }).catch(() => [])) {
     if (e.isDirectory() && /^onedrive/i.test(e.name)) candidates.push(join(home, e.name));
   }
+  // A common slip: pointing at "…\OneDrive - GEC2\5. PROJECTS" instead of the OneDrive itself. Try the parent too.
+  for (const c of [...candidates]) {
+    if (c && projectsDir() && c.split(/[\\/]/).pop().toLowerCase() === projectsDir().toLowerCase()) candidates.push(dirname(c));
+  }
   const unique = [...new Set(candidates.filter(Boolean))];
   const has = (dir, ...rel) => stat(join(dir, ...rel)).then(() => true, () => false);
-  for (const dir of unique) if (await has(dir, CONTROL_DIR, 'zordon-roster.json')) return { path: dir, found: 'roster', tried: unique };
+  const roster = (dir) => has(dir, CONTROL_DIR, 'zordon-roster.json');
+  for (const dir of unique) if (await roster(dir) && await has(dir, projectsDir() || '.')) return { path: dir, found: 'roster', tried: unique };
+  for (const dir of unique) if (await roster(dir)) return { path: dir, found: 'roster', tried: unique };
   for (const dir of unique) if (await has(dir, projectsDir() || '.')) return { path: dir, found: 'projects', tried: unique };
   return { path: clean(env.ZORDON_VAULT) || null, found: null, tried: unique };
 }

@@ -8,13 +8,15 @@ A project coordination hub for a construction PM, the APM, the project engineer 
 |---|---|
 | **Command Center** | 3D Zordon with a live HUD: alert level, clock, system lights, delayed work, change orders & billing, RFIs/submittals in your court, jobsite weather, Rangers (team) status, projects, meetings. Spoken greeting and briefing. |
 | **My Focus** | Nudges 3 days, 1 day and the day something is due, plus a **reality check**: hours due vs your real focus hours, projected finish dates at your pace, and your historical on-time rate ("you usually finish 2 days late, so add 2 days when you commit"). |
-| **Board** | Monday.com-style board grouped by project: owner, status, priority, due date, timeline, estimate. Inline editing, filters, task drawer with history. |
+| **Board** | Tasks broken out by type: RFIs, Coordination, Billing, Change orders, Submittals, Closeout, Equipment release, Tracking (Zordon sorts each new task from its words; change it anytime), or by project. Owner, status, priority, due date, timeline; inline editing, filters, task drawer with history. |
 | **Projects** | Portfolio cards with progress and health. |
 | **RFIs & Submittals** | Watchlist for Div 26/27/28, HVAC, plumbing, millwork, special glazing and framing. Pulls from Procore, Autodesk (ACC / Forma) and their notification emails. Anything in your court becomes a task on your list. |
 | **Schedule & Equipment** | 3-week look-ahead vs baseline (CSV import from P6 / MS Project), equipment release log (release-by = need date − lead time − buffer), and recurring reminders (weekly look-ahead review, monthly pay app, weekly CO log review). |
 | **Meetings** | Huddles, OACs and coordination meetings, with notes and action items that go straight onto the board. |
 | **Email Intel** | Paste (or automate) an email. Zordon extracts tasks, owners, due dates, meetings and Procore/Autodesk items. |
 | **Reminders** | Drafts a nudge for anyone with late or soon-due work. Open it in your email, copy it to Teams, and keep a sent log. |
+| **OneDrive** | Browse your real GEC2 OneDrive inside Zordon: every job's folder (📁 Folder on each project), drawings, submittals. Click a file to open it on your computer. Read-only. |
+| **Job Control Workbook** | Read-only view of each job's `GEC2_Job_Control_Workbook.xlsm`: its Dashboard (contract, change orders, billing) and any tab, as last saved in Excel. Zordon never edits it or runs its macros. |
 | **File Vault** | Every file gets a consistent name and home: `JOB-Project-Name/NN-Type/YYYY-MM-DD_JOB_Type_Description.ext`. Drop files in, or save anything into `_Inbox` and it's filed within a minute. Point it at OneDrive and it syncs everywhere. |
 
 Change orders and billing are treated as cash flow: they're never below *High* priority, become *Critical* inside 3 days, and lead Zordon's briefing.
@@ -43,10 +45,14 @@ When Zordon starts, he says *"Good morning, Damian. Make today a day better than
 team and jobs automatically. To wipe the board on this computer and start over, double-click
 `scripts/reset-zordon.bat` (it keeps a backup in `data/backups` and never touches OneDrive).
 
+**Two computers, one board:** run Zordon at work and at home and they share the same board through OneDrive
+(`Zordon/board`, one small file per task). Changes show up on the other computer within about 20 seconds; if the
+same task is changed on both, the newest change wins. Recurring reminders appear once. Demo data is never shared.
+
 ### Updating
 
-When Claude pushes changes, close Zordon and double-click `scripts/update-zordon.bat` (Mac: `update-zordon.command`),
-then start it again. Your data (`data/zordon.db`) and files are never touched by an update.
+When Claude pushes changes, double-click `scripts/update-zordon.bat` (Mac: `update-zordon.command`). On Windows it
+downloads the latest version (no Git needed), keeps your data, settings and Node, and starts Zordon again. Your data (`data/zordon.db`) and files are never touched by an update.
 
 ### Adding your own logic
 
@@ -94,32 +100,40 @@ name on the Projects page. Zordon only creates job start-up folders for real G##
 **The `_Inbox` habit:** save anything into `OneDrive/Zordon/_Inbox` and Zordon names it and files it within a minute.
 The same folder carries the hourly email batches, Claude job results and habit proposals.
 
-### Change order and submittal packages
+### The job template is the source of truth
 
-Change orders follow the **GEC2 Job Control** layout (the same rules as the Job Control app and its Claude skills):
+Zordon follows OneDrive **`5. PROJECTS/0. JOB TEMPLATE - DO NOT DELETE`** (folders, blank forms and its README):
 
-```
-01 COST CONTROL/04 CHANGE ORDERS/
-    CO 074/                                        the next number, ready and empty
-    1 PENDING (not yet submitted to GC)/CO 073 - Ice and Water Machine Power/
-        01 ESTIMATE - LABOR & MATERIAL  02 RFP-RFI REFERENCE  03 T&M TAGS  04 APPROVED CO DOCUMENTATION
-        05 QUOTES/VENDORS|SUBCONTRACTORS|CONSULTANTS|PROFESSIONAL SERVICES/<company>
-    2 SUBMITTED (awaiting GC-owner approval)/  3 APPROVED/  4 REJECTED-VOID/  5. CO LOG/
-14 SUBMITTALS/26 24 16 Panelboards/
-    01 VENDOR DATA  02 GEC2 REVIEW  03 SUBMITTED  04 RETURNED  05 APPROVED  06 RELEASED  07 CLOSEOUT
-```
+- It re-reads the template every 5 minutes. When you or Claude change it, Zordon's filing follows, `Zordon/FILING.md`
+  is rewritten (README included) so Cowork follows too, and File Vault → Job template shows what changed.
+- A new job gets a full copy of the template as `5. PROJECTS/<Job #> - <Description>`. For existing jobs,
+  **Add missing template folders to all active jobs** adds folders only (never moves, renames or overwrites).
+- File names use `YYYY-MM-DD` dates: `G2707_BURB RPT - RFI 14 - Beam at C4 - 2026-10-03.pdf`.
 
-- Start one on **RFIs & Submittals → Start a package**, or drop a file in `_Inbox` with the CO number or spec section in
-  its name ("COR 73 Graybar quote", "26 24 16 panelboards approved"). Files inside a CO folder are named
-  `CO 073 - Vendor Quote - <description>.pdf`; quotes go in the company's folder when it already exists.
-- The empty `CO 0XX` folder is renamed and moved into `1 PENDING` when it gets its first document, and the next number's
-  empty folder is created. Older folders (`COR 073`, `Change Request 073`, `262416 PANELBOARDS`) are reused in place.
-- Changing a CO's stage moves its folder (PENDING → SUBMITTED → APPROVED, or REJECTED-VOID) and puts the next step on
-  your list: build the package, follow up with the GC in 7 days, bill on the next pay app (Critical). Submitted,
-  approved and rejected also add an OPEN line to `5. PROJECTS/Zordon/_PENDING WORKBOOK UPDATES.txt` and an
-  "Update the Job Control Workbook" task, since the `.xlsm` is only ever updated by hand.
-- Pay apps go to `05 PAYMENT APPLICATIONS (MONTHLY BILLING)/PENCIL DRAFT (submitted)` or `APPROVED`, then `<year>/<MM Month>`.
-  LOIs, NTPs and POs go to `06 PURCHASE ORDERS/<company>/LOI-NTP|QUOTES|PURCHASE ORDER` when the company folder exists.
+**Change orders** follow the template: `01 COST CONTROL/04 CHANGE ORDERS/<1 PENDING | 2 SUBMITTED | 3 APPROVED |
+4 REJECTED-VOID>/CO 003 - <description>/`, each a copy of `_CO FOLDER TEMPLATE (DUPLICATE ME)`: 01 ESTIMATE - LABOR &
+MATERIAL, 02 RFP-RFI REFERENCE, 03 T&M TAGS, 04 APPROVED CO DOCUMENTATION, and 05 QUOTES/VENDORS | SUBCONTRACTORS |
+CONSULTANTS | PROFESSIONAL SERVICES with one folder per company. Files are named for what they are:
+`CO 003 - Vendor Quote - Regency Supply Change 5.pdf`, `CO 003 - T&M Tag - 2026-10-04.pdf` (the proposal sent to the GC
+also carries the job number). The next number's empty folder (`CO 004`) waits in `04 CHANGE ORDERS` itself; it is
+renamed into `1 PENDING` when it gets its first document, and the following one is made. When a document shows the CO was submitted, approved or rejected, Zordon moves the
+whole CO folder to that status folder and adds the next steps: follow up with the GC, update the Job Control Workbook,
+bill it on the next pay app. Each status change also adds an OPEN line to `5. PROJECTS/Zordon/_PENDING WORKBOOK UPDATES.txt`
+until the `.xlsm` is updated by hand.
+
+**CO package for the GC:** when the Job Control Workbook's CO PDF lands in `Zordon/_Inbox` (Claude copies it there
+when you say "send CO 001 to Zordon"), Zordon creates `CO 001 - <description>` (the description is what follows
+"CO 001" in the file name, without the job number and name), puts the form in it, and builds
+`CO 001 - G3249 - <description>.pdf`: the CO form, RFP/RFI reference, material sheets (estimate), vendor quotes,
+sub/consultant quotes and other backup (T&M tags), merged into one PDF with no cover or contents page. Backup filed later rebuilds it; **📎 Build GC package** on RFIs &
+Submittals rebuilds it by hand. Non-PDF files (Excel, Word) are listed as skipped; save them as PDF to include them.
+
+**Submittals** get one folder per spec section (`14 SUBMITTALS/26 2416 - PANELBOARDS`); their status (submitted,
+returned, approved, released) is tracked on RFIs & Submittals.
+
+**Pay apps** go to `05 PAYMENT APPLICATIONS (MONTHLY BILLING)/PENCIL DRAFT (submitted)` or `APPROVED`, then
+`<year>/<MM Month>`. **LOIs, NTPs, sub quotes and POs** go to `06 PURCHASE ORDERS/<company>/LOI-NTP | QUOTES | PURCHASE ORDER`
+when the company folder exists.
 
 ## Claude Link (Cowork)
 
@@ -162,13 +176,13 @@ With `ANTHROPIC_API_KEY` set, Claude does the email triage and file naming. With
 1. Go to https://developers.procore.com and sign in with your Procore account. Create an app and add a **Developer Managed Service Account**.
 2. Have your Procore company admin install the app in your company (Company Admin → App Management) with read access to RFIs and Submittals on your projects.
 3. Put the **Client ID** and **Client Secret** in `.env` as `PROCORE_CLIENT_ID` / `PROCORE_CLIENT_SECRET`, plus `PROCORE_COMPANY_ID`. The company id is the number in your Procore URL.
-4. Map projects: `PROCORE_PROJECTS=1:562949953421312,2:562949953425000` (Zordon project id : Procore project id from the project URL).
+4. Map projects by job number: `PROCORE_PROJECTS=G2707:562949953421312,G3249:562949953425000` (job number : Procore project id from the project URL).
 5. `PROCORE_ME=you@company.com` so items assigned to you land on your list.
 
 ### Autodesk Construction Cloud / Forma
 1. Go to https://aps.autodesk.com and create an app. Copy the **Client ID** and **Client Secret**.
 2. Have your ACC account admin add the app under Account Admin → Custom Integrations.
-3. Fill `APS_CLIENT_ID`, `APS_CLIENT_SECRET`, `APS_USER_ID` (your Autodesk user id), and `ACC_PROJECTS=1:<acc-project-id>`.
+3. Fill `APS_CLIENT_ID`, `APS_CLIENT_SECRET`, `APS_USER_ID` (your Autodesk user id), and `ACC_PROJECTS=G3052:<acc-project-id>`.
 
 Zordon syncs every 30 minutes (`ZORDON_SYNC_MINUTES`); there's also a **Sync now** button. Autodesk's endpoint paths are configurable (`ACC_RFI_SEARCH_PATH`, `ACC_SUBMITTALS_PATH`) in case Autodesk versions them. Verify them against the current APS docs when you first connect.
 
@@ -202,7 +216,7 @@ Zordon is built to run on your own computer. Before you put it on a server or op
 
 ```bash
 npm run dev    # restart on file changes
-npm test       # 42 tests: parsing, scheduling, doc control, naming, packages, archive, API
+npm test       # 60 tests: parsing, scheduling, doc control, naming, packages, archive, API
 ```
 
 - `server/`: zero-framework Node HTTP server. SQLite via Node's built-in `node:sqlite` (`data/zordon.db`).

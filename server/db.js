@@ -1,4 +1,6 @@
 // SQLite storage using Node's built-in driver (no native build step needed).
+import { categorize } from './categories.js';
+import { installBoardSync } from './boardsync.js';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -231,9 +233,10 @@ export function openDb(file = process.env.ZORDON_DB || 'data/zordon.db') {
 // Columns added after the first release; CREATE TABLE IF NOT EXISTS won't add them to older databases.
 const ADDED_COLUMNS = {
   projects: { lat: 'REAL', lon: 'REAL', short_name: 'TEXT', folder: 'TEXT' },
-  tasks: { estimate_hours: 'REAL' },
+  tasks: { estimate_hours: 'REAL', category: 'TEXT', uid: 'TEXT', rev: 'TEXT' },
   routines: { day_of_month: 'INTEGER' },
   emails: { message_id: 'TEXT' },
+  packages: { compiled_at: 'TEXT' },
 };
 
 function migrate(db) {
@@ -243,11 +246,22 @@ function migrate(db) {
   }
   // The hourly email check may see the same message twice; the message id keeps it to one import.
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_message_id ON emails(message_id) WHERE message_id IS NOT NULL');
-  // Change orders moved to the GEC2 Job Control stages (PENDING, SUBMITTED, APPROVED, BILLED, REJECTED-VOID).
+  installBoardSync(db);
+  // Change order stages from older versions (folder-per-step stages, and REJECTED-VOID) map onto today's statuses.
   const legacy = { '01 BACKUP': 'PENDING', '02 T&M': 'PENDING', '03 QUOTES': 'PENDING', '04 WORKUP': 'PENDING',
-    '05 SUBMITTED': 'SUBMITTED', '06 APPROVED': 'APPROVED', '07 BILLED': 'BILLED' };
-  const upd = db.prepare("UPDATE packages SET stage = ? WHERE type = 'cor' AND stage = ?");
-  for (const [from, to] of Object.entries(legacy)) upd.run(to, from);
+    '05 SUBMITTED': 'SUBMITTED', '06 APPROVED': 'APPROVED', '07 BILLED': 'BILLED', 'REJECTED-VOID': 'REJECTED' };
+  const moveStage = db.prepare("UPDATE packages SET stage = ? WHERE type = 'cor' AND stage = ?");
+  for (const [from, to] of Object.entries(legacy)) moveStage.run(to, from);
+  // Tasks from before categories existed get one from their words.
+  const uncategorized = db.prepare('SELECT id, title, description FROM tasks WHERE category IS NULL').all();
+  const setCategory = db.prepare('UPDATE tasks SET category = ? WHERE id = ?');
+  for (const t of uncategorized) setCategory.run(categorize(t.title, t.description), t.id);
+  // Demo data from older versions wasn't flagged; recognise it (demo team at example.com, demo job AGM-101)
+  // so the real roster can replace it.
+  const flagged = db.prepare("SELECT 1 FROM settings WHERE key = 'demo_data'").get();
+  const demoJob = db.prepare("SELECT 1 FROM projects WHERE code = 'AGM-101'").get();
+  const realPeople = db.prepare("SELECT COUNT(*) AS n FROM people WHERE email IS NOT NULL AND email NOT LIKE '%@example.com' AND lower(email) != 'damian@gec2.com'").get().n;
+  if (!flagged && demoJob && !realPeople) db.prepare("INSERT INTO settings (key, value) VALUES ('demo_data', 'true')").run();
 }
 
 // Local calendar date as YYYY-MM-DD (job sites run on local time, not UTC).
@@ -255,9 +269,11 @@ function migrate(db) {
 export function clearDemo(db) {
   if (db.prepare("SELECT value FROM settings WHERE key = 'demo_data'").get()?.value !== 'true') return false;
   db.exec('PRAGMA foreign_keys = OFF');
+  db.exec('UPDATE sync_state SET applying = 1'); // removing the demo is not a change to share
   for (const t of ['task_updates', 'reminders', 'documents', 'tracked_items', 'packages', 'schedule_activities', 'equipment', 'routines',
     'meetings', 'emails', 'tasks', 'claude_jobs', 'proposals', 'projects', 'people']) db.exec(`DELETE FROM ${t}`);
   db.exec("DELETE FROM settings WHERE key IN ('demo_data', 'me_person_id', 'vip_senders')");
+  db.exec('DELETE FROM sync_dirty; UPDATE sync_state SET applying = 0');
   db.exec('PRAGMA foreign_keys = ON');
   return true;
 }

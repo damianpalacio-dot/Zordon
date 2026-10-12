@@ -16,7 +16,7 @@ const TODAY = '2026-10-03';
 async function setup() {
   const db = openDb(':memory:');
   seedIfEmpty(db, TODAY);
-  db.prepare("UPDATE projects SET code = 'G3251', short_name = '32ND ST' WHERE id = 1").run();
+  db.prepare("UPDATE projects SET code = 'G3251', short_name = '32ND ST', folder = '5. PROJECTS/G3251' WHERE id = 1").run();
   await loadBuiltinSkills(db);
   const root = await mkdtemp(join(tmpdir(), 'zordon-claude-'));
   return { db, root };
@@ -101,4 +101,16 @@ test('skills added straight into OneDrive join the library; bad names are reject
   await syncControl(db, root);
   assert.ok(db.prepare("SELECT 1 FROM skills WHERE name = 'takeoff-count'").get());
   assert.throws(() => saveSkill(db, { name: 'Bad Name!' }), /lowercase/);
+});
+
+test('a newer built-in skill replaces the old copy, but never a skill Damian edited', async () => {
+  const { db } = await setup();
+  db.prepare("UPDATE skills SET body = 'old shipped version' WHERE name = 'spec-review'").run();
+  db.prepare("UPDATE settings SET value = ? WHERE key = 'builtin_skill_hashes'")
+    .run(JSON.stringify({ ...JSON.parse(db.prepare("SELECT value FROM settings WHERE key = 'builtin_skill_hashes'").get().value),
+      'spec-review': (await import('node:crypto')).createHash('sha1').update('old shipped version').digest('hex') }));
+  db.prepare("UPDATE skills SET body = 'Damian edited this' WHERE name = 'panel-schedule'").run();
+  await loadBuiltinSkills(db);
+  assert.match(db.prepare("SELECT body FROM skills WHERE name = 'spec-review'").get().body, /^---/);
+  assert.equal(db.prepare("SELECT body FROM skills WHERE name = 'panel-schedule'").get().body, 'Damian edited this');
 });

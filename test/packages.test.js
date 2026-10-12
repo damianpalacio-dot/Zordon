@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readdir, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -8,151 +8,157 @@ process.env.ZORDON_AI = 'off';
 process.env.ZORDON_VOICE = 'off';
 const { openDb } = await import('../server/db.js');
 const { fileDocument } = await import('../server/index.js');
-const { stageFor, coPart, packageMatches, packageName, ensurePackage, ensureChangeOrders, applyStage, listPackages } = await import('../server/packages.js');
+const { stageFor, packageMatches, packageName, ensurePackage, setStage, listPackages } = await import('../server/packages.js');
+const { loadTemplate, copyTemplate, template, templateDir } = await import('../server/template.js');
+const { applyTemplateToJobs, checkTemplate } = await import('../server/index.js');
+const { CATEGORY_FOLDERS, JOB_TEMPLATE } = await import('../server/vault.js');
 
 const TODAY = '2026-10-03';
 function freshDb() {
   const db = openDb(':memory:');
   db.prepare("INSERT INTO people (name, role) VALUES ('Damian', 'Project Manager')").run();
-  db.prepare("INSERT INTO projects (name, code, short_name) VALUES ('Burbank Replacement Terminal', 'G2707', 'BURB RPT')").run();
+  db.prepare("INSERT INTO projects (name, code, short_name, folder) VALUES ('Burbank Replacement Terminal', 'G2707', 'BURB RPT', '5. PROJECTS/G2707')").run();
   return db;
 }
 
-test('stages come from the words in the document, latest stage wins', () => {
-  assert.equal(stageFor('cor', 'COR 73 T&M tags week 1'), null);
-  assert.equal(stageFor('cor', 'COR 73 submitted to GC'), 'SUBMITTED');
-  assert.equal(stageFor('cor', 'COR 73 approved and billed on pay app 12'), 'BILLED');
-  assert.equal(stageFor('cor', 'CO 12 voided by owner'), 'REJECTED-VOID');
-  assert.equal(stageFor('submittal', '26 24 16 panelboards returned revise and resubmit'), '04 RETURNED');
-  assert.equal(stageFor('submittal', '26 24 16 approved no exceptions taken'), '05 APPROVED');
-  assert.equal(stageFor('submittal', 'nothing to see'), null);
+// A OneDrive with the GEC2 job template, shaped like the real "0. JOB TEMPLATE - DO NOT DELETE".
+const TPL = '5. PROJECTS/0. JOB TEMPLATE - DO NOT DELETE';
+const CO = `${TPL}/01 COST CONTROL/04 CHANGE ORDERS`;
+async function oneDrive() {
+  const root = await mkdtemp(join(tmpdir(), 'zordon-tpl-'));
+  const dirs = ['01 COST CONTROL/01 ORIGINAL ESTIMATE', '01 COST CONTROL/02 CONTRACT DOCUMENTS/LOI', '01 COST CONTROL/03 BUDGET',
+    '01 COST CONTROL/05 PAYMENT APPLICATIONS (MONTHLY BILLING)', '01 COST CONTROL/06 PURCHASE ORDERS', '02 BIM', '07 RFIS',
+    '12 TEMPLATES/GENERAL FORMS', '14 SUBMITTALS', '04 CHANGE ORDERS'.replace(/.*/, '01 COST CONTROL/04 CHANGE ORDERS/2 SUBMITTED (awaiting GC-owner approval)'),
+    '01 COST CONTROL/04 CHANGE ORDERS/3 APPROVED', '01 COST CONTROL/04 CHANGE ORDERS/4 REJECTED-VOID'];
+  for (const d of dirs) await mkdir(join(root, TPL, d), { recursive: true });
+  for (const d of ['01 PRICING - BACKUP', '02 RFP-RFI REFERENCE', '03 T&M TAGS', '04 APPROVED CO DOCUMENTATION']) {
+    await mkdir(join(root, CO, '1 PENDING (not yet submitted to GC)', '_CO FOLDER TEMPLATE (DUPLICATE ME)', d), { recursive: true });
+  }
+  await writeFile(join(root, TPL, '12 TEMPLATES/GENERAL FORMS/Daily Report.pdf'), 'form');
+  await writeFile(join(root, TPL, 'README - JOB FOLDER TEMPLATE.txt'), 'Dates in any filename use YYYY-MM-DD.');
+  await mkdir(join(root, 'Zordon'), { recursive: true });
+  await loadTemplate(root);
+  return root;
+}
+
+test('the OneDrive job template drives Zordon\'s folders', async () => {
+  await oneDrive();
+  assert.equal(template.found, true);
+  assert.ok(JOB_TEMPLATE.includes('01 COST CONTROL') && !JOB_TEMPLATE.includes('15 PREFAB'));
+  assert.equal(CATEGORY_FOLDERS['Pay App'], '01 COST CONTROL/05 PAYMENT APPLICATIONS (MONTHLY BILLING)');
+  assert.equal(CATEGORY_FOLDERS['Purchase Order'], '01 COST CONTROL/06 PURCHASE ORDERS');
+  assert.equal(CATEGORY_FOLDERS.COR, '01 COST CONTROL/04 CHANGE ORDERS');
+  assert.deepEqual(template.co.stages.map((s) => s.key), ['PENDING', 'SUBMITTED', 'APPROVED', 'REJECTED']);
+  assert.match(template.readme, /YYYY-MM-DD/);
 });
 
-test('each document has a home inside the CO folder', () => {
-  assert.equal(coPart('COR 73 Graybar quote')[0], '05 QUOTES/VENDORS');
-  assert.equal(coPart('COR 73 subcontractor quote Direct AV')[0], '05 QUOTES/SUBCONTRACTORS');
-  assert.equal(coPart('COR 73 McCormick estimate')[0], '01 ESTIMATE - LABOR & MATERIAL');
-  assert.equal(coPart('COR 73 T&M tag 10/02')[0], '03 T&M TAGS');
-  assert.equal(coPart('COR 73 RFI 22 response')[0], '02 RFP-RFI REFERENCE');
-  assert.equal(coPart('COR 73 executed CO')[0], '04 APPROVED CO DOCUMENTATION');
-  assert.equal(coPart('COR 73 submitted to GC'), null);
+test('new jobs get a copy of the template; existing jobs only get missing folders', async () => {
+  const root = await oneDrive();
+  const db = freshDb();
+  db.prepare("INSERT INTO projects (name, code, short_name) VALUES ('Lincoln MS Fire Alarm Upgrade', 'G3300', 'LINCOLN MS')").run();
+  await mkdir(join(root, '5. PROJECTS/G2707/07 RFIS'), { recursive: true });
+  const res = await applyTemplateToJobs(db, root);
+  assert.ok(res.folders_added > 0);
+  const fresh = join(root, '5. PROJECTS/G3300 - Lincoln MS Fire Alarm Upgrade');
+  assert.deepEqual(await readdir(join(fresh, '12 TEMPLATES/GENERAL FORMS')), ['Daily Report.pdf']); // forms come along
+  assert.ok(!(await readdir(fresh)).some((n) => /README/i.test(n)));
+  assert.ok(!(await readdir(join(fresh, '01 COST CONTROL/04 CHANGE ORDERS/1 PENDING (not yet submitted to GC)'))).length, 'the duplicate-me folder stays in the template');
+  assert.deepEqual(await readdir(join(root, '5. PROJECTS/G2707/12 TEMPLATES/GENERAL FORMS')), [], 'existing jobs get folders, not forms');
+});
+
+test('template changes are noticed and written into FILING.md', async () => {
+  const root = await oneDrive();
+  const db = freshDb();
+  await checkTemplate(db, root);
+  await mkdir(join(root, TPL, '15 COMMISSIONING'), { recursive: true });
+  await checkTemplate(db, root);
+  const changes = JSON.parse(db.prepare("SELECT value FROM settings WHERE key = 'template_changes'").get().value);
+  assert.deepEqual(changes[0].added, ['15 COMMISSIONING']);
+  const { readFile } = await import('node:fs/promises');
+  const filing = await readFile(join(root, 'Zordon/FILING.md'), 'utf8');
+  assert.match(filing, /15 COMMISSIONING/);
+  assert.match(filing, /Template README/);
+  assert.match(filing, /4 REJECTED-VOID/);
+});
+
+test('stages come from the words in the document', () => {
+  assert.equal(stageFor('cor', 'CO 73 T&M tags week 1'), null);
+  assert.equal(stageFor('cor', 'CO 73 submitted to GC'), 'SUBMITTED');
+  assert.equal(stageFor('cor', 'CO 73 fully signed, approved'), 'APPROVED');
+  assert.equal(stageFor('cor', 'CO 73 rejected by owner'), 'REJECTED');
+  assert.equal(stageFor('submittal', '26 24 16 panelboards returned revise and resubmit'), 'RETURNED');
+  assert.equal(stageFor('submittal', '26 24 16 approved no exceptions taken'), 'APPROVED');
 });
 
 test('existing folders with older names are reused', () => {
   assert.ok(packageMatches('cor', 'Change Request 073', { number: '73' }));
-  assert.ok(packageMatches('cor', 'PCO-073 Ice machine', { number: '073' }));
-  assert.ok(packageMatches('cor', 'CO 073', { number: 73 }));
+  assert.ok(packageMatches('cor', 'CO 003 (GC PCO-012) - Lighting', { number: '3' }));
+  assert.ok(packageMatches('cor', 'COR 073 Ice machine', { number: '073' }));
   assert.ok(!packageMatches('cor', 'Change Request 074', { number: '73' }));
   assert.ok(packageMatches('submittal', '262416 PANELBOARDS', { spec_section: '26 24 16' }));
-  assert.equal(packageName('cor', { number: '73', title: 'ice and water machine power' }), 'CO 073 - Ice and Water Machine Power');
-  assert.equal(packageName('submittal', { spec_section: '26 24 16', title: 'panelboards' }), '26 24 16 Panelboards');
+  assert.equal(packageName('cor', { number: '3', title: 'additional lighting circuits' }), 'CO 003 - Additional Lighting Circuits');
+  assert.equal(packageName('submittal', { spec_section: '26 24 16', title: 'panelboards' }), '26 2416 - PANELBOARDS');
 });
 
-const CO = '5. PROJECTS/G2707/01 COST CONTROL/04 CHANGE ORDERS';
-
-test('a new job gets the stage folders, the CO LOG folder and an empty CO 001', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'zordon-pkg-'));
-  assert.equal(await ensureChangeOrders(root, '5. PROJECTS/G2707'), `${CO}/CO 001`);
-  assert.deepEqual((await readdir(join(root, CO))).sort(), ['1 PENDING (not yet submitted to GC)', '2 SUBMITTED (awaiting GC-owner approval)',
-    '3 APPROVED', '4 REJECTED-VOID', '5. CO LOG', 'CO 001'].sort());
-  assert.deepEqual((await readdir(join(root, CO, 'CO 001'))).sort(), ['01 ESTIMATE - LABOR & MATERIAL', '02 RFP-RFI REFERENCE', '03 T&M TAGS',
-    '04 APPROVED CO DOCUMENTATION', '05 QUOTES']);
-  assert.deepEqual((await readdir(join(root, CO, 'CO 001/05 QUOTES'))).sort(), ['CONSULTANTS', 'PROFESSIONAL SERVICES', 'SUBCONTRACTORS', 'VENDORS']);
-});
-
-test('the ready CO folder is renamed into 1 PENDING when filled, and the next one is made', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'zordon-pkg-'));
-  await ensureChangeOrders(root, '5. PROJECTS/G2707');
-  await writeFile(join(root, CO, 'CO 001/03 T&M TAGS/tag.pdf'), 'x');
-  const folder = await ensurePackage(root, '5. PROJECTS/G2707', 'cor', { number: '1', title: 'Bus tap' });
-  assert.equal(folder, `${CO}/1 PENDING (not yet submitted to GC)/CO 001 - Bus Tap`);
-  assert.deepEqual(await readdir(join(root, folder, '03 T&M TAGS')), ['tag.pdf']);
-  assert.ok((await readdir(join(root, CO))).includes('CO 002'));
-  assert.ok(!(await readdir(join(root, CO))).includes('CO 001'));
-});
-
-test('older CO folders are reused in place, keeping their Quotes / T&M folders', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'zordon-pkg-'));
+test('a new CO is a copy of the template CO folder in PENDING; an old-style folder is reused where it is', async () => {
+  const root = await oneDrive();
   const job = '5. PROJECTS/G2707';
-  for (const d of ['Quotes', 'T&M']) await mkdir(join(root, job, '01 COST CONTROL/CHANGE ORDERS/Change Request 073', d), { recursive: true });
-  const folder = await ensurePackage(root, job, 'cor', { number: '73', title: 'Ice machine' });
-  assert.equal(folder, `${job}/01 COST CONTROL/CHANGE ORDERS/Change Request 073`);
-  const have = await readdir(join(root, folder));
-  assert.ok(have.includes('Quotes') && !have.includes('05 QUOTES'));
-  assert.ok(have.includes('01 ESTIMATE - LABOR & MATERIAL'));
-  assert.ok((await readdir(join(root, CO))).includes('CO 074'), 'next ready folder follows the highest number');
+  const fresh = await ensurePackage(root, job, 'cor', { number: '3', title: 'Additional lighting circuits' });
+  assert.equal(fresh.folder, `${job}/01 COST CONTROL/04 CHANGE ORDERS/1 PENDING (not yet submitted to GC)/CO 003 - Additional Lighting Circuits`);
+  assert.equal(fresh.stage, 'PENDING');
+  assert.deepEqual((await readdir(join(root, fresh.folder))).sort(), ['01 PRICING - BACKUP', '02 RFP-RFI REFERENCE', '03 T&M TAGS', '04 APPROVED CO DOCUMENTATION']);
+  await mkdir(join(root, job, '01 COST CONTROL/CHANGE ORDERS/Change Request 073'), { recursive: true });
+  const old = await ensurePackage(root, job, 'cor', { number: '73', title: 'Ice machine' });
+  assert.equal(old.folder, `${job}/01 COST CONTROL/CHANGE ORDERS/Change Request 073`);
 });
 
-test('filing a CO quote lands in its company folder; submitting moves the folder and asks for the workbook update', async () => {
+test('filing CO documents: right subfolder, CO number names, and the folder moves with its status', async () => {
   const db = freshDb();
-  const root = await mkdtemp(join(tmpdir(), 'zordon-pkg-'));
-  await mkdir(join(root, 'Zordon'), { recursive: true });
-  await mkdir(join(root, CO, '1 PENDING (not yet submitted to GC)/CO 073 - Ice and Water Machine/05 QUOTES/VENDORS/GRAYBAR ELECTRIC'), { recursive: true });
-  const a = await fileDocument(db, root, { buffer: Buffer.from('x'), filename: 'quote.pdf', project_id: 1, hint: 'COR 73 Graybar quote ice and water machine' }, TODAY);
-  const doc = db.prepare('SELECT path FROM documents WHERE id = ?').get(a.id);
-  assert.equal(doc.path, `${CO}/1 PENDING (not yet submitted to GC)/CO 073 - Ice and Water Machine/05 QUOTES/VENDORS/GRAYBAR ELECTRIC/CO 073 - Vendor Quote - Graybar Quote Ice and Water Machine.pdf`);
+  const root = await oneDrive();
+  const pending = '5. PROJECTS/G2707/01 COST CONTROL/04 CHANGE ORDERS/1 PENDING (not yet submitted to GC)/CO 003 - Additional Lighting Circuits';
+  const a = await fileDocument(db, root, { buffer: Buffer.from('x'), filename: 'quote.pdf', project_id: 1, hint: 'CO 3 additional lighting circuits Graybar quote' }, TODAY);
+  assert.equal(db.prepare('SELECT path FROM documents WHERE id = ?').get(a.id).path, `${pending}/01 PRICING - BACKUP/CO 003 - Vendor Quote - Additional Lighting Circuits Graybar Quote.pdf`);
+  const t = await fileDocument(db, root, { buffer: Buffer.from('x'), filename: 'tag.pdf', project_id: 1, hint: 'CO 3 additional lighting circuits T&M tag' }, TODAY);
+  assert.match(db.prepare('SELECT path FROM documents WHERE id = ?').get(t.id).path, /\/03 T&M TAGS\/CO 003 - .* - 2026-10-03\.pdf$/);
+
+  // Sent to the GC: the whole CO folder moves to SUBMITTED, the proposal carries the job number, and a follow-up appears.
+  const p = await fileDocument(db, root, { buffer: Buffer.from('x'), filename: 'co.pdf', project_id: 1, hint: 'CO 3 additional lighting circuits proposal submitted to GC' }, TODAY);
+  const submitted = pending.replace('1 PENDING (not yet submitted to GC)', '2 SUBMITTED (awaiting GC-owner approval)');
+  assert.match(db.prepare('SELECT path FROM documents WHERE id = ?').get(p.id).path, new RegExp(`^${submitted.replace(/[()]/g, '\\$&')}/01 PRICING - BACKUP/CO 003 - G2707 - `));
+  assert.deepEqual(await readdir(join(root, submitted, '01 PRICING - BACKUP')).then((x) => x.length), 2);
   let [pkg] = listPackages(db);
-  assert.equal(pkg.stage, 'PENDING');
-  assert.match(db.prepare("SELECT title FROM tasks WHERE source = 'package'").get().title, /^Build the package and draft the GC email for CO 073/);
-
-  await fileDocument(db, root, { buffer: Buffer.from('x'), filename: 'cor.pdf', project_id: 1, hint: 'COR 73 submitted to GC with cover letter' }, TODAY);
-  [pkg] = listPackages(db);
   assert.equal(pkg.stage, 'SUBMITTED');
-  assert.equal(pkg.folder, `${CO}/2 SUBMITTED (awaiting GC-owner approval)/CO 073 - Ice and Water Machine`);
-  assert.deepEqual((await readdir(join(root, pkg.folder, '05 QUOTES/VENDORS/GRAYBAR ELECTRIC'))).length, 1, 'the quote moved with its folder');
-  assert.ok(db.prepare('SELECT path FROM documents WHERE id = ?').get(a.id).path.startsWith(pkg.folder), 'and its document record followed');
-  const task = db.prepare("SELECT * FROM tasks WHERE source = 'package' AND status != 'done'").get();
-  assert.match(task.title, /^Follow up with the GC for approval of CO 073/);
-  assert.equal(task.due_date, '2026-10-10');
-  assert.ok(db.prepare("SELECT 1 FROM tasks WHERE source = 'workbook' AND title LIKE 'Update the Job Control Workbook: CO 073 submitted%'").get());
-  const log = await readFile(join(root, '5. PROJECTS/Zordon/_PENDING WORKBOOK UPDATES.txt'), 'utf8');
-  assert.match(log, /OPEN \| 2026-10-03 \| G2707 \| CO 073 \| SUBMITTED \| Ice and Water Machine\n---- DONE ----/);
+  assert.equal(pkg.folder, submitted);
+  assert.ok(db.prepare("SELECT 1 FROM tasks WHERE source = 'package' AND status != 'done' AND title LIKE 'Follow up with the GC for approval of CO 003%'").get());
 
-  // An older backup filed later doesn't move the package backwards.
-  await fileDocument(db, root, { buffer: Buffer.from('x'), filename: 'sk1.pdf', project_id: 1, hint: 'COR 73 backup sketch SK-1 from GC' }, TODAY);
-  assert.equal(listPackages(db)[0].stage, 'SUBMITTED');
-  assert.ok((await readdir(join(root, pkg.folder, '02 RFP-RFI REFERENCE'))).length === 1);
-
-  // Approval closes the follow-up and asks for billing.
-  await applyStage(db, root, pkg.id, 'APPROVED', { today: TODAY, me: 1, addTask: (t) => Number(db.prepare(`INSERT INTO tasks (project_id, title, owner_id, priority, due_date, source, source_ref)
-    VALUES (?, ?, ?, ?, ?, ?, ?)`).run(t.project_id, t.title, t.owner_id, t.priority, t.due_date, t.source, t.source_ref).lastInsertRowid) });
-  const open = db.prepare("SELECT title, priority FROM tasks WHERE source = 'package' AND status != 'done'").all();
-  assert.equal(open.length, 1);
-  assert.match(open[0].title, /^Bill on the next pay app: CO 073/);
-  assert.equal(open[0].priority, 'critical');
-  assert.equal(listPackages(db)[0].folder, `${CO}/3 APPROVED/CO 073 - Ice and Water Machine`);
+  // Approved: moves to APPROVED, asks for the workbook update and the billing.
+  const addTask = (x) => Number(db.prepare('INSERT INTO tasks (project_id, title, owner_id, priority, due_date, source, source_ref) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(x.project_id, x.title, x.owner_id, x.priority, x.due_date, x.source, x.source_ref).lastInsertRowid);
+  await setStage(db, pkg.id, 'APPROVED', { today: TODAY, me: 1, addTask, root, force: true });
+  [pkg] = listPackages(db);
+  assert.match(pkg.folder, /\/3 APPROVED\/CO 003 - /);
+  const open = db.prepare("SELECT title, priority FROM tasks WHERE source = 'package' AND status != 'done' ORDER BY id").all();
+  assert.deepEqual(open.map((x) => x.title.split(' CO 003')[0]), ['Update Job Control Workbook for approved', 'Bill on the next pay app:']);
 });
 
-test('pay apps and purchase orders go where the GEC2 template keeps them', async () => {
+test('a submittal with a spec section goes in its spec folder', async () => {
   const db = freshDb();
-  const root = await mkdtemp(join(tmpdir(), 'zordon-pkg-'));
-  await mkdir(join(root, '5. PROJECTS/G2707/01 COST CONTROL/06 PURCHASE ORDERS/ACME FIRE ALARM'), { recursive: true });
-  const pay = await fileDocument(db, root, { buffer: Buffer.from('x'), filename: 'pa.pdf', project_id: 1, hint: 'Pay app 6 pencil draft' }, TODAY);
-  assert.match(db.prepare('SELECT path FROM documents WHERE id = ?').get(pay.id).path,
-    /^5\. PROJECTS\/G2707\/01 COST CONTROL\/05 PAYMENT APPLICATIONS \(MONTHLY BILLING\)\/PENCIL DRAFT \(submitted\)\/2026\/10 October\//);
-  const loi = await fileDocument(db, root, { buffer: Buffer.from('x'), filename: 'loi.pdf', project_id: 1, hint: 'LOI Acme Fire Alarm' }, TODAY);
-  assert.match(db.prepare('SELECT path FROM documents WHERE id = ?').get(loi.id).path, /06 PURCHASE ORDERS\/ACME FIRE ALARM\/LOI-NTP\//);
-});
-
-test('a submittal with a spec section gets its own package', async () => {
-  const db = freshDb();
-  const root = await mkdtemp(join(tmpdir(), 'zordon-pkg-'));
+  const root = await oneDrive();
   await mkdir(join(root, '5. PROJECTS/G2707/14 SUBMITTALS/26 24 16 PANELBOARDS'), { recursive: true });
   const a = await fileDocument(db, root, { buffer: Buffer.from('x'), filename: 'sub.pdf', project_id: 1, hint: 'Submittal 26 24 16 panelboards approved no exceptions taken' }, TODAY);
-  const doc = db.prepare('SELECT path FROM documents WHERE id = ?').get(a.id);
-  assert.match(doc.path, /^5\. PROJECTS\/G2707\/14 SUBMITTALS\/26 24 16 PANELBOARDS\/05 APPROVED\//);
+  assert.match(db.prepare('SELECT path FROM documents WHERE id = ?').get(a.id).path, /^5\. PROJECTS\/G2707\/14 SUBMITTALS\/26 24 16 PANELBOARDS\/G2707_BURB RPT - SUBMITTAL/);
   const [pkg] = listPackages(db);
-  assert.equal(pkg.spec_section, '26 24 16');
-  assert.equal(pkg.stage, '05 APPROVED');
+  assert.equal(pkg.stage, 'APPROVED');
   assert.ok(db.prepare("SELECT 1 FROM tasks WHERE source = 'package' AND title LIKE 'Release equipment for Submittal 26 24 16%'").get());
+  const b = await fileDocument(db, root, { buffer: Buffer.from('x'), filename: 'sub2.pdf', project_id: 1, hint: 'Submittal 28 31 00 fire alarm product data' }, TODAY);
+  assert.match(db.prepare('SELECT path FROM documents WHERE id = ?').get(b.id).path, /\/14 SUBMITTALS\/28 3100 - FIRE ALARM/);
 });
 
-test('a note dropped as a plain file still files normally when there is no number', async () => {
+test('a document with no CO number still files normally', async () => {
   const db = freshDb();
-  const root = await mkdtemp(join(tmpdir(), 'zordon-pkg-'));
-  await writeFile(join(root, 'x'), '');
+  const root = await oneDrive();
   const a = await fileDocument(db, root, { buffer: Buffer.from('x'), filename: 'co log.xlsx', project_id: 1, hint: 'change order log' }, TODAY);
-  assert.match(db.prepare('SELECT path FROM documents WHERE id = ?').get(a.id).path, /^5\. PROJECTS\/G2707\/01 COST CONTROL\/04 CHANGE ORDERS\/G2707_BURB RPT - COR - /);
+  assert.match(db.prepare('SELECT path FROM documents WHERE id = ?').get(a.id).path, /^5\. PROJECTS\/G2707\/01 COST CONTROL\/04 CHANGE ORDERS\/G2707_BURB RPT - CO - /);
   assert.equal(listPackages(db).length, 0);
 });
 
@@ -186,4 +192,134 @@ test('finds the GEC2 OneDrive without a path in .env', async () => {
   // A wrong or quoted path in .env still falls through to the real one.
   assert.equal((await detectVault({ ZORDON_VAULT: '"C:\\nope"' }, home)).path, join(home, 'OneDrive - GECTWO'));
   assert.equal((await detectVault({ ZORDON_VAULT: `"${join(home, 'OneDrive - GECTWO')}\\"` }, home)).found, 'roster');
+});
+
+test('unflagged demo data from older versions is recognised', async () => {
+  const { seedIfEmpty } = await import('../server/db.js');
+  const dir = await mkdtemp(join(tmpdir(), 'zordon-legacy-'));
+  const file = join(dir, 'z.db');
+  let db = openDb(file);
+  seedIfEmpty(db, TODAY);
+  db.exec("DELETE FROM settings WHERE key = 'demo_data'"); // what older versions left behind
+  db.close();
+  db = openDb(file);
+  assert.equal(db.prepare("SELECT value FROM settings WHERE key = 'demo_data'").get()?.value, 'true');
+  db.close();
+});
+
+test('OneDrive browser lists job folders and never leaves the vault', async () => {
+  const { oneDriveStatus, listFolder, safePath } = await import('../server/onedrive.js');
+  const root = await mkdtemp(join(tmpdir(), 'zordon-od-'));
+  await mkdir(join(root, '5. PROJECTS/G2707/14 SUBMITTALS'), { recursive: true });
+  await mkdir(join(root, '5. PROJECTS/LAUSD 32ND ST'), { recursive: true });
+  await writeFile(join(root, '5. PROJECTS/G2707/notes.pdf'), 'x');
+  await writeFile(join(root, '5. PROJECTS/G2707/desktop.ini'), 'x');
+  const st = await oneDriveStatus(root);
+  assert.equal(st.connected, true);
+  assert.equal(st.job_folders, 2);
+  const list = await listFolder(root, '5. PROJECTS/G2707');
+  assert.deepEqual(list.items.map((i) => [i.name, i.dir]), [['14 SUBMITTALS', true], ['notes.pdf', false]]);
+  assert.equal(list.items[1].path, '5. PROJECTS/G2707/notes.pdf');
+  assert.throws(() => safePath(root, '../../etc'), /outside your OneDrive/);
+});
+
+test('a vault pointed at "5. PROJECTS" or a demo roster is not mistaken for the real one', async () => {
+  const { detectVault } = await import('../server/vault.js');
+  const { loadRoster } = await import('../server/index.js');
+  const home = await mkdtemp(join(tmpdir(), 'zordon-home2-'));
+  const od = join(home, 'OneDrive - GEC2');
+  await mkdir(join(od, '5. PROJECTS', 'Zordon'), { recursive: true });
+  await writeFile(join(od, '5. PROJECTS', 'Zordon', 'zordon-roster.json'), '{}'); // the stray copy
+  await mkdir(join(od, 'Zordon'), { recursive: true });
+  await writeFile(join(od, 'Zordon', 'zordon-roster.json'), '{}');
+  assert.equal((await detectVault({ ZORDON_VAULT: join(od, '5. PROJECTS') }, home)).path, od);
+
+  const db = freshDb();
+  db.exec('DELETE FROM people; DELETE FROM projects');
+  assert.equal(loadRoster(db, { people: [{ name: 'Jordan Lee', email: 'jordan.lee@example.com' }], projects: [{ name: 'Angel Grove', code: 'AGM-101' }] }), false);
+});
+
+test('Procore/Autodesk items can be mapped by job number', async () => {
+  const { upsertItems } = await import('../server/doccontrol.js');
+  const db = freshDb();
+  upsertItems(db, [{ origin: 'procore', external_id: '77', type: 'rfi', number: '12', title: 'Conduit routing', project_id: 'G2707' }], TODAY);
+  assert.equal(db.prepare("SELECT project_id FROM tracked_items WHERE external_id = '77'").get().project_id, 1);
+});
+
+test('a CO form PDF from the workbook creates "CO 001 - description" and compiles the package for the GC', async () => {
+  const { PDFDocument } = await import('pdf-lib');
+  const pdf = async (pages) => { const d = await PDFDocument.create(); for (let i = 0; i < pages; i++) d.addPage([612, 792]); return Buffer.from(await d.save()); };
+  const db = freshDb();
+  const root = await oneDrive();
+  const { compilePackage } = await import('../server/index.js');
+
+  // Backup already sitting in the CO folder (filed earlier by Damian or Claude).
+  const q = await fileDocument(db, root, { buffer: await pdf(2), filename: 'graybar quote.pdf', project_id: 1, hint: 'CO 1 additional lighting circuits Graybar quote' }, TODAY);
+  const tm = await fileDocument(db, root, { buffer: await pdf(1), filename: 'tag.pdf', project_id: 1, hint: 'CO 1 additional lighting circuits T&M tag' }, TODAY);
+  assert.equal(q.compiled, null);
+
+  // The workbook's PDF arrives in the _Inbox: job number and job name drop out of the folder name.
+  const form = await fileDocument(db, root, { buffer: await pdf(1), filename: 'G2707 - Burbank Replacement Terminal - CO 001 - Additional Lighting Circuits.pdf' }, TODAY);
+  const folder = '5. PROJECTS/G2707/01 COST CONTROL/04 CHANGE ORDERS/1 PENDING (not yet submitted to GC)/CO 001 - Additional Lighting Circuits';
+  assert.equal(db.prepare('SELECT path FROM documents WHERE id = ?').get(form.id).path, `${folder}/CO 001 - Additional Lighting Circuits.pdf`);
+  assert.ok(db.prepare('SELECT path FROM documents WHERE id = ?').get(q.id).path.startsWith(`${folder}/01 PRICING - BACKUP/`));
+  assert.ok(db.prepare('SELECT path FROM documents WHERE id = ?').get(tm.id).path.startsWith(`${folder}/03 T&M TAGS/`));
+
+  // Opens straight on the form (1), then quote (2), then T&M tag (1): no contents page. A spreadsheet is listed as skipped, not lost.
+  assert.equal(form.compiled.path, `${folder}/CO 001 - G2707 - Additional Lighting Circuits.pdf`);
+  assert.equal(form.compiled.pages, 4);
+  assert.deepEqual(form.compiled.included.map((i) => i.section), ['Change order', 'Pricing & backup', 'T&M tags']);
+  const built = await PDFDocument.load(await (await import('node:fs/promises')).readFile(join(root, form.compiled.path)));
+  assert.equal(built.getPageCount(), 4);
+  assert.ok(db.prepare("SELECT 1 FROM tasks WHERE title LIKE 'Review and send CO 001 package to the GC%'").get());
+
+  await writeFile(join(root, folder, '01 PRICING - BACKUP', 'labor.xlsx'), 'x');
+  const again = await compilePackage(db, root, listPackages(db)[0].id, TODAY);
+  assert.equal(again.pages, 4);
+  assert.match(again.skipped[0].file, /labor\.xlsx$/);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE title LIKE 'Review and send CO 001%'").get().n, 1, 'one review task, not one per rebuild');
+});
+
+test('job folders grouped one level down are found (5. PROJECTS/TOUCH N GO/G2934)', async () => {
+  const { findJobFolder } = await import('../server/vault.js');
+  const root = await mkdtemp(join(tmpdir(), 'zordon-group-'));
+  await mkdir(join(root, '5. PROJECTS/TOUCH N GO/G2934/QUOTES'), { recursive: true });
+  await mkdir(join(root, '5. PROJECTS/G3249'), { recursive: true });
+  assert.equal(await findJobFolder(root, { code: 'G2934', name: 'Apple Crossing - AEC PH1 Test (TNG)' }), '5. PROJECTS/TOUCH N GO/G2934');
+  assert.equal(await findJobFolder(root, { code: 'G3249', name: 'SWA Cargo' }), '5. PROJECTS/G3249');
+});
+
+test('reads a macro-enabled Job Control Workbook without changing it', async () => {
+  const ExcelJS = (await import('exceljs')).default;
+  const JSZip = (await import('jszip')).default;
+  const { readFile, writeFile, stat } = await import('node:fs/promises');
+  const { findWorkbook, readWorkbook, readSheet } = await import('../server/workbook.js');
+  const root = await mkdtemp(join(tmpdir(), 'zordon-wb-'));
+  await mkdir(join(root, '5. PROJECTS/G3212/01 COST CONTROL/Archive'), { recursive: true });
+  const wb = new ExcelJS.Workbook();
+  const d = wb.addWorksheet('DASHBOARD');
+  d.addRow(['JOB COST DASHBOARD']); d.addRow(['JOB', 'G3212']);
+  d.addRow(['Original contract', 1250000]); d.getCell('B3').numFmt = '$#,##0.00';
+  d.addRow(['Approved change orders', { formula: 'B3*0.04', result: 50000 }]); d.getCell('B4').numFmt = '$#,##0.00';
+  wb.addWorksheet('CO LOG').addRow(['CO #', 'Description', 'Amount', 'Status']);
+  const p = join(root, '5. PROJECTS/G3212/01 COST CONTROL/G3212 GEC2_Job_Control_Workbook.xlsm');
+  await wb.xlsx.writeFile(p);
+  const zip = await JSZip.loadAsync(await readFile(p));
+  zip.file('[Content_Types].xml', (await zip.file('[Content_Types].xml').async('string'))
+    .replace('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml', 'application/vnd.ms-excel.sheet.macroEnabled.main+xml'));
+  zip.file('xl/vbaProject.bin', Buffer.from('macros'));
+  await writeFile(p, await zip.generateAsync({ type: 'nodebuffer' }));
+  await writeFile(join(root, '5. PROJECTS/G3212/01 COST CONTROL/Archive/GEC2_Job_Control_Workbook.xlsm'), 'old');
+  const before = await readFile(p);
+
+  const found = await findWorkbook(root, '5. PROJECTS/G3212');
+  assert.equal(found.path, '5. PROJECTS/G3212/01 COST CONTROL/G3212 GEC2_Job_Control_Workbook.xlsm', 'archive copies are ignored');
+  const data = await readWorkbook(root, found.path);
+  assert.deepEqual(data.sheets.map((x) => x.name), ['DASHBOARD', 'CO LOG']);
+  const item = (l) => data.dashboard.items.find((i) => i.label === l);
+  assert.equal(item('Original contract').value, 1250000);
+  assert.equal(item('Original contract').money, true);
+  assert.equal(item('Approved change orders').value, 50000, 'formulas show the value Excel saved');
+  assert.deepEqual((await readSheet(root, found.path, 'CO LOG')).rows[0], ['CO #', 'Description', 'Amount', 'Status']);
+  assert.ok(before.equals(await readFile(p)), 'the workbook is never written');
 });

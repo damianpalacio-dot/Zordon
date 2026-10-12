@@ -1,5 +1,6 @@
 // Zordon Command Center — HTTP API + static UI, no framework.
 import { createServer } from 'node:http';
+import { spawn } from 'node:child_process';
 import { readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,12 +14,18 @@ import { connectorStatus, syncAll } from './connectors.js';
 import { createVoiceSession, greeting, say, FAREWELL } from './voice.js';
 import { projectWeather } from './weather.js';
 import { scanOld, applyPlan, listArchiveLogs, undoArchive } from './cleanup.js';
-import { STAGES, packageType, stageFor, ensurePackage, partFolder, specKey, recordPackage, applyStage, listPackages, ensureChangeOrders, corNumber } from './packages.js';
+import { oneDriveStatus, listFolder, openOnComputer } from './onedrive.js';
+import { STAGES, packageType, stageFor, ensurePackage, coSubfolder, coLabel, specKey, recordPackage, setStage, listPackages } from './packages.js';
+import { template, loadTemplate, copyTemplate, templateDir } from './template.js';
+import { compileCo } from './compile.js';
+import { TASK_CATEGORIES, CATEGORY_KEYS, categorize } from './categories.js';
+import { syncBoard, shareExistingTasks, syncStatus, BOARD_DIR } from './boardsync.js';
+import { findWorkbook, readWorkbook, readSheet } from './workbook.js';
 import { leadTime, createElectricalPlan, LEAD_TIMES } from './electrical.js';
 import { loadBuiltinSkills, listSkills, saveSkill, createJob, listJobs, syncControl, importJobResult, filingRules,
   importProposal, decideProposal, listProposals } from './claude.js';
-import { CATEGORY_NAMES, CATEGORY_FOLDERS, cleanName, suggestName, finalize, textSnippet, uniquePath, saveFile, moveFile, deleteFile, vaultPath,
-  ensureProjectFolders, inboxFiles, readVaultFile, projectFolder, isJobNumber, JOB_TEMPLATE, CONTROL_DIR, INBOX, findJobFolder, refineFolder, detectVault } from './vault.js';
+import { CATEGORY_NAMES, CATEGORY_FOLDERS, suggestName, finalize, textSnippet, uniquePath, saveFile, moveFile, deleteFile, vaultPath,
+  ensureProjectFolders, inboxFiles, readVaultFile, projectFolder, isJobNumber, JOB_TEMPLATE, CONTROL_DIR, INBOX, findJobFolder, refineFolder, detectVault, cleanName, titleCase } from './vault.js';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const STATIC_DIRS = {
@@ -57,8 +64,10 @@ function mustExist(row, what) {
 }
 
 function taskFields(body, { creating }) {
-  const f = pick(body, ['project_id', 'title', 'description', 'owner_id', 'status', 'priority', 'start_date', 'due_date', 'source', 'source_ref']);
+  const f = pick(body, ['project_id', 'title', 'description', 'owner_id', 'status', 'priority', 'start_date', 'due_date', 'source', 'source_ref', 'category']);
   if (creating) required(f.title, 'title');
+  if ('category' in f && !CATEGORY_KEYS.includes(f.category)) delete f.category;
+  if (creating && !f.category) f.category = categorize(f.title, f.description);
   oneOf(f.status, STATUSES, 'status');
   oneOf(f.priority, PRIORITIES, 'priority');
   for (const k of ['start_date', 'due_date']) if (k in f) f[k] = dateOrNull(f[k], k);
@@ -134,12 +143,6 @@ function acceptEmail(db, id, { tasks = [], meetings = [] }) {
   return created;
 }
 
-// GEC2 job folders, the change orders stage folders and the ready CO folder for the next number.
-async function jobFolders(vaultRoot, project) {
-  await ensureProjectFolders(vaultRoot, project);
-  await ensureChangeOrders(vaultRoot, projectFolder(project));
-}
-
 const fileExists = (p) => stat(p).then(() => true, () => false);
 const docSelect = `SELECT d.*, pr.name AS project_name, pr.code AS project_code, t.title AS task_title
   FROM documents d LEFT JOIN projects pr ON pr.id = d.project_id LEFT JOIN tasks t ON t.id = d.task_id`;
@@ -165,13 +168,11 @@ export async function fileDocument(db, vaultRoot, { buffer, fromRel, filename, p
   let pkg = null;
   if (project) {
     const full = db.prepare('SELECT * FROM projects WHERE id = ?').get(project.id);
-    pkg = await packageFor(db, vaultRoot, full, chosen, hay, today);
+    pkg = await packageFor(db, vaultRoot, full, { ...chosen, original: filename }, hay, today);
     if (pkg) {
       chosen.folder = pkg.folder;
-      if (pkg.filename) chosen.filename = pkg.filename;
-    } else {
-      chosen.folder = await gec2Subfolder(vaultRoot, await refineFolder(vaultRoot, chosen.folder, projectFolder(full), hay), chosen.category, hay, today);
-    }
+      if (pkg.filename) chosen.filename = `${pkg.filename}${extname(chosen.filename)}`;
+    } else chosen.folder = await gec2Subfolder(await refineFolder(vaultRoot, chosen.folder, projectFolder(full), hay), chosen.category, hay, today);
   }
   const rel = await uniquePath(vaultRoot, chosen.folder, chosen.filename, fileExists);
   if (fromRel) await moveFile(vaultRoot, fromRel, rel);
@@ -179,54 +180,145 @@ export async function fileDocument(db, vaultRoot, { buffer, fromRel, filename, p
   const id = db.prepare(`INSERT INTO documents (project_id, task_id, title, category, original_name, path, size, mime, notes)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(chosen.project_id, task_id ? Number(task_id) : null, chosen.title, chosen.category,
     filename, rel, content.length, mime || null, notes || null).lastInsertRowid;
-  return { id: Number(id), analyzer: suggestion.analyzer };
+  // A new CO form builds the GC package; new backup for a CO that already has a package rebuilds it.
+  let compiled = null;
+  if (pkg?.id && (pkg.compile || db.prepare('SELECT compiled_at FROM packages WHERE id = ?').get(pkg.id)?.compiled_at)) {
+    compiled = await compilePackage(db, vaultRoot, pkg.id, today).catch((err) => { console.warn(`[co] package: ${err.message}`); return null; });
+  }
+  return { id: Number(id), analyzer: suggestion.analyzer, compiled };
 }
 
-// A COR with a number, or a submittal with a spec section, goes into its own package folder. A change order lands in
-// the GEC2 Job Control layout: 01 COST CONTROL/04 CHANGE ORDERS/<stage folder>/CO 073 - <title>/05 QUOTES/VENDORS,
-// named "CO 073 - Vendor Quote - <description>.pdf". Returns null for everything else.
+// Build (or rebuild) a change order's package for the GC: CO form + pricing/backup + estimate + RFP/RFI + T&M tags.
+export async function compilePackage(db, vaultRoot, packageId, today = isoDate()) {
+  const pkg = mustExist(db.prepare('SELECT * FROM packages WHERE id = ?').get(Number(packageId)), 'Change order');
+  if (pkg.type !== 'cor') throw new HttpError(400, 'Only change orders are compiled');
+  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(pkg.project_id);
+  const first = !pkg.compiled_at;
+  const result = await compileCo(vaultRoot, pkg.folder, { label: coLabel(pkg.number), jobCode: project?.code, jobName: project?.name, desc: pkg.title, today });
+  db.prepare('UPDATE packages SET compiled_at = ? WHERE id = ?').run(new Date().toISOString(), pkg.id);
+  if (first) {
+    createTask(db, { project_id: pkg.project_id, owner_id: mePersonId(db), title: `Review and send ${coLabel(pkg.number)} package to the GC - ${pkg.title}`,
+      description: `Package: ${result.path}\n${result.included.length} file(s), ${result.pages} pages${result.skipped.length ? `\nNot included: ${result.skipped.map((x) => x.file.split('/').pop()).join(', ')}` : ''}`,
+      priority: 'high', due_date: addDays(today, 1), status: 'not_started', source: 'package', source_ref: pkg.id });
+  }
+  console.log(`[co] ${coLabel(pkg.number)} package: ${result.pages} pages from ${result.included.length} file(s)${result.skipped.length ? `, ${result.skipped.length} skipped` : ''}`);
+  return result;
+}
+
+// A CO with a number, or a submittal with a spec section, goes into its own folder as the job template lays out:
+//   01 COST CONTROL/04 CHANGE ORDERS/<status>/CO 03 - <title>/<subfolder>   named "CO 03 - <description>"
+//   14 SUBMITTALS/26 2416 - <TITLE>
+// A document that shows a new status (submitted, approved, rejected) moves the CO folder there. Null for anything else.
 async function packageFor(db, vaultRoot, project, chosen, hay, today) {
   const type = packageType(chosen.category);
   if (!type) return null;
-  const desc = chosen.title.replace(/^[A-Z ]+?(\s[\w.-]*\d[\w.-]*)?\s-\s/, '');
-  const number = type === 'cor' ? chosen.title.match(/^COR (\d+)\b/)?.[1] : null;
+  let desc = chosen.title.replace(/^[A-Z ]+?(\s(?:\d{2} \d{2} ?\d{2}|[\w.-]*\d[\w.-]*))?\s-\s/, '');
+  let number = type === 'cor' ? chosen.title.match(/^CO (\d+)\b/)?.[1] : null;
+  // A CO form PDF ("G3249 - Burbank SWA Cargo - CO 001 - Additional Lighting Circuits.pdf"): the number and the
+  // description come from the file name, after "CO ###", which drops the job number and job name.
+  const base = String(chosen.original || '').replace(/\.[^.]+$/, '');
+  const coInName = base.match(/\b(?:CO|COR|PCO|CHANGE ORDER)\s*[#-]?\s*0*(\d{1,4})\b\s*(?:\([^)]*\))?\s*[-–:_]*\s*(.*)$/i);
+  const isCoForm = type === 'cor' && /\.pdf$/i.test(chosen.original || '') && Boolean(coInName)
+    && !/t\s?&\s?m|\btags?\b|ticket|quote|quotation|backup|back-up|\brfi\b|\brfp\b|bulletin|\basi\b|\bccd\b|directive|reference|approved|executed|fully signed|rejected|\bvoid\b|estimate|takeoff|photo/i.test(hay);
+  if (isCoForm) {
+    number = coInName[1];
+    const rest = titleCase(cleanName(coInName[2].replace(/\(?\d{1,2}[.-]\d{1,2}[.-]\d{2,4}\)?|\d{4}-\d{2}-\d{2}/g, '').replace(/[_]+/g, ' '), 120)
+      .replace(/^[\s\-–:]+|[\s\-–:]+$/g, ''));
+    if (rest) desc = rest;
+  }
   const spec_section = type === 'submittal' ? specKey(hay) : null;
   if (type === 'cor' ? !number : !spec_section) return null;
-  const stage = stageFor(type, hay);
-  const existing = db.prepare('SELECT stage FROM packages WHERE project_id = ? AND type = ? AND (number = ? OR spec_section = ?)')
-    .get(project.id, type, number ? corNumber(number) : '', spec_section || '');
-  const folder = await ensurePackage(vaultRoot, projectFolder(project), type, { number, spec_section, title: desc }, existing?.stage || stage);
-  // An existing CO folder's own description ("CO 073 - Ice and Water Machine") names the package.
-  const named = type === 'cor' ? folder.split('/').pop().match(/^[^-]*\d\s+-\s+(.+)$/)?.[1] : null;
-  const rec = recordPackage(db, { project_id: project.id, type, number, spec_section, title: named || desc, folder }, today);
-  const opts = { today, me: mePersonId(db), addTask: (t) => createTask(db, t) };
-  const res = stage ? await applyStage(db, vaultRoot, rec.id, stage, opts) : await applyStage(db, vaultRoot, rec.id, rec.stage, { ...opts, initial: true });
-  const where = await partFolder(vaultRoot, res.package.folder, type, { stage, hay });
-  if (type !== 'cor') return { id: rec.id, folder: where.folder };
-  const ext = chosen.filename.match(/\.[^.]+$/)?.[0] || '';
-  const co = `CO ${corNumber(number)}`;
-  const filename = where.label
-    ? `${co} - ${where.label} - ${desc || 'Document'}${ext}`
-    : `${co} - ${cleanName(project.code || project.name, 40)} - ${desc || 'Change Order'}${ext}`;
-  return { id: rec.id, folder: where.folder, filename: cleanName(filename, 150) };
+  // The CO / submittal folder is named for the change or the equipment, not for this particular document.
+  const folderTitle = isCoForm ? desc : desc.replace(/^\d{2}(\s?\d{2}){0,2}\s*-?\s*/, '')
+    .replace(/\b(graybar|ced|quotes?|quotation|pricing|backup|back-up|t\s?&\s?m|tags?|tickets?|proposal|cover letter|submitted|sent to (the )?gc|approved|fully signed|signed|executed|rejected|void|product data|cut ?sheets?|shop drawings?|no exceptions taken|revise and resubmit|returned|transmittal)\b/gi, ' ')
+    .replace(/\s+/g, ' ').trim().replace(/^(for|of|the|and|to|on|re)\b\s*/i, '') || desc;
+  const found = await ensurePackage(vaultRoot, projectFolder(project), type, { number, spec_section, title: folderTitle });
+  let rec = recordPackage(db, { project_id: project.id, type, number, spec_section, title: folderTitle, folder: found.folder, stage: found.stage }, today);
+  const docStage = stageFor(type, hay);
+  if (docStage) {
+    rec = (await setStage(db, rec.id, docStage, { today, me: mePersonId(db), addTask: (t) => createTask(db, t), root: vaultRoot })).package;
+  }
+  if (type !== 'cor') return { id: rec.id, folder: rec.folder };
+  // The CO form itself (the PDF made from the Job Control Workbook) sits at the top of the CO folder and
+  // triggers the package for the GC; everything else goes in a backup subfolder.
+  if (isCoForm) return { id: rec.id, folder: rec.folder, filename: cleanName(`${coLabel(number)} - ${rec.title}`, 150), compile: true };
+  const { sub, label } = await coSubfolder(vaultRoot, rec.folder, hay);
+  // Files in a CO folder carry the CO number and what they are ("CO 003 - Vendor Quote - Graybar Change 5",
+  // "CO 003 - T&M Tag - 2026-10-04"); the proposal that goes to the GC also carries the job number.
+  const proposal = /proposal|cover letter|submitted|sent to (the )?gc/i.test(hay);
+  const co = coLabel(number);
+  const filename = cleanName(label === 'T&M Tag' ? `${co} - T&M Tag - ${today}`
+    : label ? `${co} - ${label} - ${desc}`
+      : `${co}${proposal && project.code ? ` - ${project.code}` : ''} - ${desc}`, 150);
+  return { id: rec.id, folder: sub ? `${rec.folder}/${sub}` : rec.folder, filename };
 }
 
-// GEC2 subfolders for documents that aren't part of a CO or submittal package:
+// GEC2 subfolders for documents that aren't part of a CO or submittal folder:
 //   Pay apps:  05 PAYMENT APPLICATIONS (MONTHLY BILLING)/PENCIL DRAFT (submitted)|APPROVED/<year>/<MM Month>
-//   POs, LOIs, NTPs, sub quotes: 06 PURCHASE ORDERS/<company>/QUOTES|LOI-NTP|PURCHASE ORDER (when the company folder exists)
+//   Sub quotes, LOIs/NTPs, POs: 06 PURCHASE ORDERS/<company>/QUOTES|LOI-NTP|PURCHASE ORDER (when the company folder exists)
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-async function gec2Subfolder(vaultRoot, folder, category, hay, today) {
-  if (category === 'Pay App' && /05 PAYMENT APPLICATIONS/.test(folder)) {
+function gec2Subfolder(folder, category, hay, today) {
+  if (category === 'Pay App' && /PAYMENT APPLICATIONS/i.test(folder.split('/').pop())) {
     const kind = /pencil|draft/i.test(hay) ? 'PENCIL DRAFT (submitted)' : /approved|final|executed|signed/i.test(hay) ? 'APPROVED' : null;
     if (!kind) return folder;
     const [y, m] = today.split('-');
     return `${folder}/${kind}/${y}/${m} ${MONTHS[Number(m) - 1]}`;
   }
-  if (category === 'Purchase Order' && /06 PURCHASE ORDERS\/[^/]+$/.test(folder)) {
-    return `${folder}/${/\bloi\b|letter of intent|\bntp\b|notice to proceed/i.test(hay) && !/purchase order issued/i.test(hay) ? 'LOI-NTP'
-      : /quote|quotation|proposal/i.test(hay) ? 'QUOTES' : 'PURCHASE ORDER'}`;
+  if (category === 'Purchase Order' && /PURCHASE ORDERS?\/[^/]+$/i.test(folder)) {
+    const kind = /\bloi\b|letter of intent|\bntp\b|notice to proceed/i.test(hay) ? 'LOI-NTP' : /quote|quotation|proposal/i.test(hay) ? 'QUOTES' : 'PURCHASE ORDER';
+    return `${folder}/${kind}`;
   }
   return folder;
+}
+
+// ---------- The job template ----------
+// A new job gets a full copy of the template (folders and blank forms). A job that already has a folder only gets the
+// template folders it's missing; nothing is ever moved, renamed or overwritten.
+export async function setUpJobFolder(vaultRoot, project) {
+  if (!template.found) return ensureProjectFolders(vaultRoot, project);
+  return copyTemplate(vaultRoot, projectFolder(project), { foldersOnly: Boolean(project.folder) });
+}
+
+export async function applyTemplateToJobs(db, vaultRoot) {
+  const projects = db.prepare("SELECT * FROM projects WHERE status = 'active'").all().filter((p) => isJobNumber(p.code));
+  const results = [];
+  for (const p of projects) {
+    const added = await setUpJobFolder(vaultRoot, p).catch((err) => { console.warn(`[template] ${p.code}: ${err.message}`); return 0; });
+    results.push({ code: p.code, folder: projectFolder(p), added: typeof added === 'number' ? added : 0 });
+  }
+  return { template: template.found ? templateDir() : null, jobs: results, folders_added: results.reduce((n, r) => n + r.added, 0) };
+}
+
+// Re-read the template; when it changed (new folders, renamed stages, new README rules), remember what changed and
+// rewrite FILING.md so Claude picks it up too.
+export async function checkTemplate(db, vaultRoot) {
+  const res = await loadTemplate(vaultRoot);
+  if (!template.found) return res;
+  const saved = getSetting(db, 'template_signature', null);
+  if (saved !== template.signature) {
+    const prevPaths = new Set(getSetting(db, 'template_paths', []));
+    const nowPaths = template.tree.map((t) => t.path);
+    const added = saved ? nowPaths.filter((x) => !prevPaths.has(x)) : [];
+    const removed = saved ? [...prevPaths].filter((x) => !nowPaths.includes(x)) : [];
+    setSetting(db, 'template_signature', template.signature);
+    setSetting(db, 'template_paths', nowPaths);
+    if (saved) {
+      const log = [{ at: new Date().toISOString(), added, removed }, ...getSetting(db, 'template_changes', [])].slice(0, 20);
+      setSetting(db, 'template_changes', log);
+      console.log(`[template] job template changed: +${added.length} / -${removed.length}`);
+    }
+    await syncControl(db, vaultRoot).catch((err) => console.warn(`[claude] sync: ${err.message}`));
+  }
+  return res;
+}
+
+function templateStatus(db) {
+  return {
+    found: template.found, path: templateDir(), checked_at: template.checked_at,
+    folders: template.dirs.length, files: template.files.length, top: JOB_TEMPLATE,
+    change_orders: template.found ? template.co : null, has_readme: Boolean(template.readme),
+    changes: getSetting(db, 'template_changes', []),
+  };
 }
 
 // A batch of already-analyzed emails, written to the vault's _Inbox by the hourly Claude email check.
@@ -307,8 +399,19 @@ export async function seedFromRoster(db, vaultRoot) {
     rosterStatus.error = err.code === 'ENOENT' ? 'not found' : `could not read it yet (${err.code || err.message})`;
     return false;
   }
-  const people = Array.isArray(roster.people) ? roster.people.filter((p) => p?.name) : [];
+  return loadRoster(db, roster);
+}
+
+// Put a roster's team, jobs and standing reminders in. Replaces demo data; never touches real data.
+export function loadRoster(db, roster) {
+  const isDemo = db.prepare("SELECT value FROM settings WHERE key = 'demo_data'").get()?.value === 'true';
+  if (!isDemo && db.prepare('SELECT COUNT(*) AS n FROM people').get().n > 0) return false;
+  const people = Array.isArray(roster?.people) ? roster.people.filter((p) => p?.name) : [];
   if (!people.length) return false;
+  // A roster written from demo data (older versions did this) is not the real team.
+  const demoRoster = (roster.projects || []).some((p) => ['AGM-101', 'CCR-202'].includes(p?.code))
+    || people.some((p) => /@example\.com$/i.test(p.email || ''));
+  if (demoRoster) { rosterStatus.error = 'demo roster'; return false; }
   if (isDemo) clearDemo(db);
   const colors = RANGER_COLORS;
   const insertPerson = db.prepare('INSERT INTO people (name, role, trade, email, color) VALUES (?, ?, ?, ?, ?)');
@@ -371,11 +474,18 @@ export async function writeRoster(db, vaultRoot) {
 
 const categoryForPath = (path) => Object.entries(CATEGORY_FOLDERS).find(([, f]) => f && path.includes(`/${f}/`))?.[0] || 'General';
 
+// What the _Inbox check saw last, so the screen can say whether email is flowing.
+export const inboxStatus = { checked_at: null, waiting: [], last_import: null, errors: [] };
+
 export async function processInbox(db, vaultRoot, today = isoDate()) {
   const filed = [];
+  inboxStatus.checked_at = new Date().toISOString();
+  inboxStatus.errors = [];
   let linked = false;
   const link = async () => { if (!linked) { linked = true; await linkJobFolders(db, vaultRoot).catch(() => {}); } };
-  for (const f of await inboxFiles(vaultRoot)) {
+  const files = await inboxFiles(vaultRoot);
+  inboxStatus.waiting = files.map((f) => f.name);
+  for (const f of files) {
     try {
       if (/\.proposal\.zordon\.json$/i.test(f.name)) {
         importProposal(db, JSON.parse((await readVaultFile(vaultRoot, f.rel)).toString('utf8')));
@@ -394,14 +504,18 @@ export async function processInbox(db, vaultRoot, today = isoDate()) {
         linked = false; // new jobs may have arrived
         await moveFile(vaultRoot, f.rel, `${f.rel.replace(/[^/]+$/, '')}.imported/${f.name}`);
         console.log(`[email] imported ${result.emails} email(s): ${result.tasks} task(s), ${result.meetings} meeting(s), ${result.duplicates} already seen`);
+        inboxStatus.last_import = { at: new Date().toISOString(), file: f.name, ...result };
         continue;
       }
       await link();
       filed.push(await fileDocument(db, vaultRoot, { fromRel: f.rel, filename: f.name }, today));
     } catch (err) {
       console.warn(`[vault] could not file ${f.name}: ${err.message}`);
+      inboxStatus.errors.push({ file: f.name, error: err.code === 'EPERM' || err.code === 'EACCES' || /cloud|provider/i.test(err.message)
+        ? `OneDrive did not download it (${err.code || err.message}). Right-click the OneDrive Zordon folder → Always keep on this device.` : err.message });
     }
   }
+  inboxStatus.waiting = (await inboxFiles(vaultRoot)).map((f) => f.name);
   return filed;
 }
 
@@ -417,7 +531,7 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
     }],
     ['POST', '/api/voice/goodbye', () => voice.goodbye()],
     ['POST', '/api/voice/say', ({ body }) => ({ spoken: say(required(body.text, 'text')) })],
-    ['GET', '/api/meta', () => ({ statuses: STATUSES, priorities: PRIORITIES, colors: RANGER_COLORS, ai: aiEnabled(), today: today(),
+    ['GET', '/api/meta', () => ({ statuses: STATUSES, priorities: PRIORITIES, colors: RANGER_COLORS, categories: TASK_CATEGORIES, ai: aiEnabled(), today: today(),
       demo: db.prepare("SELECT value FROM settings WHERE key = 'demo_data'").get()?.value === 'true', vault_set: Boolean(process.env.ZORDON_VAULT), vault: process.env.ZORDON_VAULT || null, roster_error: rosterStatus.error })],
     ['GET', '/api/dashboard', () => {
       runRoutines(db, today());
@@ -425,7 +539,7 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
         ...dashboard(db, today()),
         doccontrol: docControlSummary(db, today()),
         focus_person_id: mePersonId(db),
-        systems: { ai: aiEnabled(), voice: voice.enabled(), connectors: connectorStatus() },
+        systems: { ai: aiEnabled(), voice: voice.enabled(), connectors: connectorStatus(), board: { ...syncStatus }, onedrive: Boolean(process.env.ZORDON_VAULT) && vaultRoot === process.env.ZORDON_VAULT },
       };
     }],
 
@@ -456,8 +570,8 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
       await linkJobFolders(db, vaultRoot).catch(() => {});
       const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
       // Real GEC2 jobs (G####) get the job start-up folders; other projects are left alone.
-      if (isJobNumber(project.code)) await jobFolders(vaultRoot, project).catch((err) => console.warn(`[vault] ${err.message}`));
-      return project;
+      if (isJobNumber(project.code)) await setUpJobFolder(vaultRoot, project).catch((err) => console.warn(`[vault] ${err.message}`));
+      return db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
     }],
     ['PATCH', '/api/projects/:id', async ({ params, body }) => {
       const before = mustExist(db.prepare('SELECT * FROM projects WHERE id = ?').get(Number(params.id)), 'Project');
@@ -568,11 +682,11 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
       const filed = await processInbox(db, vaultRoot, today());
       return filed.map(({ id, analyzer }) => ({ ...getDoc(id), analyzer }));
     }],
-    ['POST', '/api/vault/folders', async () => {
-      const projects = db.prepare("SELECT * FROM projects WHERE status != 'closed'").all().filter((p) => isJobNumber(p.code));
-      for (const p of projects) await jobFolders(vaultRoot, p);
-      return { root: vaultRoot, projects: projects.map((p) => projectFolder(p)), folders: JOB_TEMPLATE };
-    }],
+    ['POST', '/api/vault/folders', () => applyTemplateToJobs(db, vaultRoot)],
+    // ----- The OneDrive job template ("5. PROJECTS/0. JOB TEMPLATE - DO NOT DELETE") -----
+    ['GET', '/api/template', () => templateStatus(db)],
+    ['POST', '/api/template/apply', () => applyTemplateToJobs(db, vaultRoot)],
+    ['POST', '/api/template/check', async () => { await checkTemplate(db, vaultRoot); return templateStatus(db); }],
     // ----- Archive old files (moves only, logged, undoable) -----
     ['POST', '/api/cleanup/scan', async ({ body }) => {
       const areas = (Array.isArray(body.areas) ? body.areas : ['root', 'documents', 'projects']).filter((a) => ['root', 'documents', 'projects'].includes(a));
@@ -587,6 +701,26 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
     ['POST', '/api/cleanup/undo', async ({ body }) => {
       try { return await undoArchive(vaultRoot, required(body.log, 'log')); } catch (err) { throw new HttpError(400, err.message); }
     }],
+    ['GET', '/api/inbox/status', () => ({ ...inboxStatus, inbox: join(vaultRoot, INBOX) })],
+    ['POST', '/api/inbox/check', async () => { await processInbox(db, vaultRoot, today()); return { ...inboxStatus, inbox: join(vaultRoot, INBOX) }; }],
+    // ----- Job Control Workbook (read-only) -----
+    ['GET', '/api/projects/:id/workbook', async ({ params, query }) => {
+      const project = mustExist(db.prepare('SELECT * FROM projects WHERE id = ?').get(Number(params.id)), 'Project');
+      const found = await findWorkbook(vaultRoot, projectFolder(project));
+      if (!found) return { found: false, folder: projectFolder(project) };
+      try {
+        if (query.sheet) return { found: true, ...(await readSheet(vaultRoot, found.path, query.sheet)), path: found.path };
+        return { found: true, ...(await readWorkbook(vaultRoot, found.path)) };
+      } catch (err) {
+        if (err.status) throw new HttpError(err.status, err.message);
+        return { found: true, path: found.path, error: /lock|busy|EBUSY/i.test(err.message) ? 'The workbook is open and locked; close it in Excel and try again.' : `Could not read it (${err.message})` };
+      }
+    }],
+
+    // ----- OneDrive browser -----
+    ['GET', '/api/onedrive', ({ query }) => (query.path === undefined ? oneDriveStatus(vaultRoot)
+      : listFolder(vaultRoot, query.path).catch((err) => { throw new HttpError(err.status || 404, err.status ? err.message : 'Folder not found'); }))],
+    ['POST', '/api/onedrive/open', async ({ body }) => openOnComputer(vaultRoot, required(body.path, 'path'))],
     ['GET', '/api/vault', () => ({ root: vaultRoot, inbox: join(vaultRoot, INBOX), projects_dir: join(vaultRoot, projectFolder({ code: '<Job #>' })), folders: JOB_TEMPLATE })],
     ['GET', '/api/documents/:id/file', ({ params }) => {
       const d = getDoc(params.id);
@@ -623,28 +757,42 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
       return { deleted: true };
     }],
 
+    // Load the team and jobs from a zordon-roster.json the user picks (when OneDrive can't be read directly).
+    ['POST', '/api/roster/import', ({ body }) => {
+      if (!Array.isArray(body?.people) || !body.people.length) throw new HttpError(400, 'That file is not a Zordon roster (no people in it)');
+      if (!loadRoster(db, body)) throw new HttpError(409, 'Zordon already has your real data. Use scripts/reset-zordon.bat to start over.');
+      writeRoster(db, vaultRoot).catch(() => {});
+      return { people: db.prepare('SELECT COUNT(*) AS n FROM people').get().n, projects: db.prepare('SELECT COUNT(*) AS n FROM projects').get().n };
+    }],
+
     // ----- Change order & submittal packages -----
     ['GET', '/api/packages', ({ query }) => ({
       packages: listPackages(db, { ...query, open: query.open === '1' }),
-      stages: Object.fromEntries(Object.entries(STAGES).map(([k, v]) => [k, v.map(([name, what, , folder]) => ({ name, what, folder: folder || null }))])),
+      stages: { cor: STAGES.cor, submittal: STAGES.submittal },
     })],
     // Start a package by hand: creates the folder with every stage subfolder and starts tracking it.
     ['POST', '/api/packages', async ({ body }) => {
       const type = required(['cor', 'submittal'].includes(body.type) ? body.type : null, 'type (cor or submittal)');
       const project = mustExist(db.prepare('SELECT * FROM projects WHERE id = ?').get(Number(body.project_id)), 'Project');
-      if (type === 'cor' && !/^\d+$/.test(String(body.number || '').trim())) throw Object.assign(new Error('COR number is required'), { status: 400 });
-      if (type === 'submittal' && !specKey(body.spec_section)) throw Object.assign(new Error('Spec section is required (e.g. 26 24 16)'), { status: 400 });
-      const info = { number: String(body.number || '').trim(), spec_section: body.spec_section, title: required(body.title, 'title') };
-      const folder = await ensurePackage(vaultRoot, projectFolder(project), type, info, body.stage);
-      const pkg = recordPackage(db, { project_id: project.id, type, ...info, folder, amount: body.amount ? Number(body.amount) : null }, today());
-      const opts = { today: today(), me: mePersonId(db), addTask: (t) => createTask(db, t) };
-      return (await applyStage(db, vaultRoot, pkg.id, body.stage || pkg.stage, { ...opts, initial: !body.stage })).package;
+      // CO numbers are assigned per job, in order, and never reused: blank means "next number".
+      let number = String(body.number || '').trim();
+      if (type === 'cor' && !number) {
+        const last = db.prepare("SELECT MAX(CAST(number AS INTEGER)) AS n FROM packages WHERE project_id = ? AND type = 'cor'").get(project.id).n;
+        number = String((last || 0) + 1);
+      }
+      if (type === 'cor' && !/^\d+$/.test(number)) throw new HttpError(400, 'CO number must be a number');
+      if (type === 'submittal' && !specKey(body.spec_section)) throw new HttpError(400, 'Spec section is required (e.g. 26 24 16)');
+      const info = { number, spec_section: body.spec_section, title: required(body.title, 'title') };
+      const found = await ensurePackage(vaultRoot, projectFolder(project), type, info);
+      const pkg = recordPackage(db, { project_id: project.id, type, ...info, folder: found.folder, stage: found.stage, amount: body.amount ? Number(body.amount) : null }, today());
+      return body.stage ? (await setStage(db, pkg.id, body.stage, { today: today(), me: mePersonId(db), addTask: (t) => createTask(db, t), root: vaultRoot })).package : pkg;
     }],
-    ['PATCH', '/api/packages/:id', async ({ params, body }) => {
+    ['PATCH', '/api/packages/:id', ({ params, body }) => {
       if (body.amount !== undefined) db.prepare('UPDATE packages SET amount = ? WHERE id = ?').run(body.amount === '' ? null : Number(body.amount), Number(params.id));
-      return applyStage(db, vaultRoot, Number(params.id), body.stage ?? mustExist(db.prepare('SELECT stage FROM packages WHERE id = ?').get(Number(params.id)), 'Package').stage,
-        { force: true, today: today(), me: mePersonId(db), addTask: (t) => createTask(db, t) });
+      return setStage(db, Number(params.id), body.stage ?? mustExist(db.prepare('SELECT stage FROM packages WHERE id = ?').get(Number(params.id)), 'Package').stage,
+        { force: true, today: today(), me: mePersonId(db), addTask: (t) => createTask(db, t), root: vaultRoot });
     }],
+    ['POST', '/api/packages/:id/compile', ({ params }) => compilePackage(db, vaultRoot, params.id, today())],
     ['DELETE', '/api/packages/:id', ({ params }) => {
       db.prepare('DELETE FROM packages WHERE id = ?').run(Number(params.id));
       return { deleted: true, note: 'Stopped tracking. The folder and its files were left in place.' };
@@ -911,20 +1059,37 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   setInterval(cycle, Number(process.env.ZORDON_SYNC_MINUTES || 30) * 60_000).unref();
   // File anything saved into the vault's _Inbox folder every minute (documents, and hourly email batches).
   const vaultRoot = process.env.ZORDON_VAULT || join(ROOT, 'files');
+  // Keep OneDrive's Zordon folder downloaded on this PC ("Always keep on this device"), so email batches and the
+  // roster are always readable. Windows only; harmless elsewhere.
+  if (process.platform === 'win32' && process.env.ZORDON_VAULT) {
+    spawn('attrib', ['+P', '-U', join(vaultRoot, CONTROL_DIR), '/S', '/D'], { stdio: 'ignore', windowsHide: true }).on('error', () => {});
+  }
   await loadBuiltinSkills(db);
-  for (const l of await linkJobFolders(db, vaultRoot).catch(() => [])) console.log(`[vault] ${l.code || l.id} → ${l.folder}`);
-  await syncControl(db, vaultRoot).catch((err) => console.warn(`[claude] sync: ${err.message}`));
+  await checkTemplate(db, vaultRoot).catch((err) => console.warn(`[template] ${err.message}`));
+  console.log(template.found ? `Job template: ${templateDir()} (${template.dirs.length} folders)` : `No job template at ${templateDir()} yet — using the standard folders.`);
+  setInterval(() => checkTemplate(db, vaultRoot).catch(() => {}), 5 * 60_000).unref();
+  // Open the doors first; scanning OneDrive can take a while and the window shouldn't wait on it.
+  createServer(createApp(db, { voice })).listen(port, () => {
+    console.log(`\n  ⚡ Zordon Command Center online → http://localhost:${port}`);
+    console.log(`  Email intelligence: ${aiEnabled() ? 'Claude' : 'rule-based (set ANTHROPIC_API_KEY to enable Claude)'}\n`);
+  });
   const roster = () => writeRoster(db, vaultRoot).catch((err) => console.warn(`[vault] roster: ${err.message}`));
-  roster();
+  (async () => {
+    for (const l of await linkJobFolders(db, vaultRoot).catch(() => [])) console.log(`[vault] ${l.code || l.id} → ${l.folder}`);
+    await syncControl(db, vaultRoot).catch((err) => console.warn(`[claude] sync: ${err.message}`));
+    roster();
+    processInbox(db, vaultRoot).catch((err) => console.warn(`[vault] inbox: ${err.message}`));
+  })();
   setInterval(roster, 15 * 60_000).unref();
   // Still on demo data? Keep trying the roster (OneDrive may still be downloading it) and switch over by itself.
   setInterval(async () => {
     if (db.prepare("SELECT value FROM settings WHERE key = 'demo_data'").get()?.value !== 'true') return;
     if (await seedFromRoster(db, vaultRoot)) { console.log('Loaded your team and jobs from Zordon/zordon-roster.json.'); roster(); }
   }, 60_000).unref();
+  // One board on every computer that runs Zordon (via OneDrive/Zordon/board). The first run shares what's here.
+  if (!getSetting(db, 'board_shared', false)) { shareExistingTasks(db); setSetting(db, 'board_shared', true); }
+  const board = () => syncBoard(db, vaultRoot).then((r) => (r.imported || r.exported) && console.log(`[board] ${r.imported} in, ${r.exported} out`));
+  board();
+  setInterval(board, 20_000).unref();
   setInterval(() => processInbox(db, vaultRoot).then((f) => f.length && console.log(`[vault] filed ${f.length} file(s) from _Inbox`)), 60_000).unref();
-  createServer(createApp(db, { voice })).listen(port, () => {
-    console.log(`\n  ⚡ Zordon Command Center online → http://localhost:${port}`);
-    console.log(`  Email intelligence: ${aiEnabled() ? 'Claude' : 'rule-based (set ANTHROPIC_API_KEY to enable Claude)'}\n`);
-  });
 }

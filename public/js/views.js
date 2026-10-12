@@ -18,7 +18,7 @@ async function projects(el, _p, { render }) {
           <div class="bar"><span style="width:${p.progress}%"></span></div>
           <div class="row small"><span>${p.progress}% done</span><span class="spacer"></span><span>${p.open} open</span>${p.delayed ? `<span class="pill h-delayed">${p.delayed} late</span>` : ''}</div>
           <div class="row"><a class="btn sm" href="#/board?project_id=${p.id}">Board</a><a class="btn sm" href="#/schedule?project_id=${p.id}">Look-ahead</a>
-            <a class="btn sm" href="#/vault?project_id=${p.id}">Files</a><button class="btn sm gold" data-eplan="${p.id}">⚡ Electrical plan</button><span class="spacer"></span><button class="btn sm ghost" data-edit="${p.id}">Edit</button></div>
+            <a class="btn sm" href="#/onedrive?path=${encodeURIComponent(p.folder || `5. PROJECTS/${p.code || p.name}`)}">📁 Folder</a><a class="btn sm" href="#/vault?project_id=${p.id}">Files</a><a class="btn sm" href="#/workbook?project_id=${p.id}">📊 Workbook</a><button class="btn sm gold" data-eplan="${p.id}">⚡ Electrical plan</button><span class="spacer"></span><button class="btn sm ghost" data-edit="${p.id}">Edit</button></div>
         </section>`).join('')}
       <section class="panel">
         <h2>New project</h2>
@@ -56,6 +56,78 @@ async function projects(el, _p, { render }) {
     const status = prompt('Status: active, on_hold or closed', p.status);
     guard(async () => { await api(`/api/projects/${p.id}`, { method: 'PATCH', body: { name, code, short_name, folder: folder || null, status } }); render(); });
   });
+}
+
+// ---------------- OneDrive ----------------
+// Browse the real GEC2 OneDrive: job folders, drawings, submittals. Click a file to open it on this computer.
+const fmtSize = (n) => (n == null ? '' : n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1048576).toFixed(1)} MB`);
+async function onedrive(el, params) {
+  const status = await api('/api/onedrive');
+  if (!status.connected) {
+    el.innerHTML = `<div class="page-head"><div><h1>OneDrive</h1></div></div>
+      <section class="panel"><h2>Not connected</h2><p>Zordon can't see your GEC2 OneDrive on this computer. Make sure OneDrive is signed in and syncing, then restart Zordon.</p></section>`;
+    return;
+  }
+  const path = params.get('path') ?? status.projects_dir ?? '';
+  let listing;
+  try { listing = await api(`/api/onedrive?path=${encodeURIComponent(path)}`); } catch (err) {
+    listing = { path, items: [], error: err.message };
+  }
+  const parts = listing.path ? listing.path.split('/') : [];
+  const crumbs = [`<a href="#/onedrive?path=">OneDrive</a>`, ...parts.map((name, i) =>
+    `<a href="#/onedrive?path=${encodeURIComponent(parts.slice(0, i + 1).join('/'))}">${esc(name)}</a>`)].join(' <span class="dim">/</span> ');
+  const job = store.projects.find((p) => listing.path && (listing.path === p.folder || listing.path === `${status.projects_dir}/${p.code}`));
+  el.innerHTML = `
+    <div class="page-head">
+      <div><h1>OneDrive</h1><p><span class="pill h-done">● Connected</span> <span class="mono small">${esc(status.root)}</span>
+        · ${status.job_folders} job folders in <span class="mono">${esc(status.projects_dir)}</span></p></div>
+      <div class="row">${store.projects.length ? `<select id="jump">${options(store.projects.filter((p) => p.code), '', { empty: 'Jump to a job…', value: (p) => p.folder || `${status.projects_dir}/${p.code}`, text: (p) => `${p.code} ${p.short_name || p.name}` })}</select>` : ''}
+        <button class="btn" id="open-here">📂 Open in File Explorer</button></div>
+    </div>
+    <div class="crumbs" style="margin-bottom:12px">${crumbs}${job ? ` <span class="pill">${esc(job.name)}</span>` : ''}</div>
+    ${listing.error ? `<div class="empty">${esc(listing.error)}${job ? ' — this job has no folder yet. Use File Vault → Create project folders.' : ''}</div>` : ''}
+    <div class="table-wrap"><table>
+      <thead><tr><th>Name</th><th>Modified</th><th>Size</th></tr></thead>
+      <tbody>${listing.items.map((i) => `<tr class="od-row" data-path="${esc(i.path)}" data-dir="${i.dir ? 1 : ''}" style="cursor:pointer">
+        <td>${i.dir ? '📁' : '📄'} ${esc(i.name)}</td><td class="small">${esc(i.modified || '')}</td><td class="small">${i.dir ? '' : fmtSize(i.size)}</td></tr>`).join('')
+        || (listing.error ? '' : '<tr><td colspan="3" class="dim">Empty folder.</td></tr>')}</tbody>
+    </table></div>
+    <p class="small dim" style="margin-top:10px">Click a folder to open it here; click a file to open it on this computer. Zordon never moves or deletes anything from this page.</p>`;
+  wire(el, '.od-row', 'click', (_e, n) => {
+    if (n.dataset.dir) location.hash = `#/onedrive?path=${encodeURIComponent(n.dataset.path)}`;
+    else guard(async () => { await api('/api/onedrive/open', { method: 'POST', body: { path: n.dataset.path } }); toast('Opening…'); });
+  });
+  el.querySelector('#open-here').addEventListener('click', () => guard(() => api('/api/onedrive/open', { method: 'POST', body: { path: listing.path || '.' } })));
+  el.querySelector('#jump')?.addEventListener('change', (e) => { if (e.target.value) location.hash = `#/onedrive?path=${encodeURIComponent(e.target.value)}`; });
+}
+
+// ---------------- Job Control Workbook (read-only) ----------------
+const fmtVal = (v, money) => (typeof v === 'number' ? (money ? v.toLocaleString(undefined, { style: 'currency', currency: 'USD' }) : v.toLocaleString()) : String(v ?? ''));
+async function workbook(el, params) {
+  const pid = params.get('project_id') || store.projects.find((p) => p.code)?.id;
+  const sheet = params.get('sheet');
+  const wb = pid ? await api(`/api/projects/${pid}/workbook${sheet ? `?sheet=${encodeURIComponent(sheet)}` : ''}`) : { found: false };
+  const pick = `<select id="wb-job">${options(store.projects.filter((p) => p.code), pid, { text: (p) => `${p.code} ${p.short_name || p.name}` })}</select>`;
+  let body;
+  if (!wb.found) body = `<div class="empty">No Job Control Workbook found in <span class="mono">${esc(wb.folder || '')}</span>. Zordon looks for a file named like <span class="mono">GEC2_Job_Control_Workbook.xlsm</span> in the job's folders.</div>`;
+  else if (wb.error) body = `<div class="empty">${esc(wb.error)}</div>`;
+  else if (wb.rows) {
+    body = `<div class="table-wrap"><table><tbody>${wb.rows.map((r) => `<tr>${r.map((v) => `<td class="small">${esc(fmtVal(v))}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+  } else {
+    body = `<section class="panel"><header><h2>${esc(wb.dashboard?.name || 'Dashboard')}</h2><span class="small dim">as last saved in Excel</span></header>
+      <div class="wb-grid">${(wb.dashboard?.items || []).map((i) => i.value === null
+        ? `<div class="wb-head">${esc(i.label)}</div>`
+        : `<div class="wb-row"><span class="muted">${esc(i.label)}</span><b class="${i.money ? 'mono' : ''}">${esc(fmtVal(i.value, i.money))}</b></div>`).join('') || '<div class="empty">The first sheet has no label/value rows.</div>'}</div></section>`;
+  }
+  el.innerHTML = `
+    <div class="page-head"><div><h1>Job Control Workbook</h1><p>Read-only view of the job's workbook: Zordon never edits it or runs its macros.</p></div>
+      <div class="row">${pick}${wb.path ? '<button class="btn" id="wb-open">Open in Excel</button>' : ''}</div></div>
+    ${wb.path ? `<div class="small muted mono" style="margin-bottom:10px">${esc(wb.path)}${wb.modified ? ` · saved ${esc(new Date(wb.modified).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))}` : ''}</div>` : ''}
+    ${wb.sheets ? `<div class="chips" style="margin-bottom:12px">${wb.sheets.map((x) => `<a class="chip" href="#/workbook?project_id=${pid}&sheet=${encodeURIComponent(x.name)}">${esc(x.name)}</a>`).join('')}</div>` : ''}
+    ${sheet ? `<div class="crumbs" style="margin-bottom:10px"><a href="#/workbook?project_id=${pid}">Dashboard</a> <span class="dim">/</span> ${esc(sheet)}</div>` : ''}
+    ${body}`;
+  el.querySelector('#wb-job')?.addEventListener('change', (e) => { location.hash = `#/workbook?project_id=${e.target.value}`; });
+  el.querySelector('#wb-open')?.addEventListener('click', () => guard(() => api('/api/onedrive/open', { method: 'POST', body: { path: wb.path } })));
 }
 
 // ---------------- RFIs & submittals ----------------
@@ -142,6 +214,13 @@ async function doccontrol(el, params, { render }) {
     toast(res.task_id ? `Moved to ${n.value} — next step added to your list` : `Moved to ${n.value}`);
     render();
   }));
+  wire(el, '[data-compile]', 'click', (_e, n) => guard(async () => {
+    n.disabled = true;
+    const r = await api(`/api/packages/${n.dataset.compile}/compile`, { method: 'POST', body: {} });
+    toast(`Package built: ${r.pages} pages from ${r.included.length} file(s)${r.skipped.length ? ` · ${r.skipped.length} skipped (not PDF)` : ''}`);
+    render();
+  }));
+  wire(el, '[data-open]', 'click', (_e, n) => guard(() => api('/api/onedrive/open', { method: 'POST', body: { path: n.dataset.open } })));
   el.querySelector('#new-pkg').addEventListener('submit', (e) => {
     e.preventDefault();
     const body = formData(e.target);
@@ -161,23 +240,25 @@ function packagesPanel({ packages, stages }) {
   const lane = (type, heading) => {
     const list = packages.filter((p) => p.type === type);
     return `<section class="panel"><header><h2>${heading}</h2><span class="small dim">${list.length} open</span></header>
-      <div class="pkg-stages">${stages[type].map((s) => `<span title="${esc(s.what)}${s.folder ? ` · ${esc(s.folder)}` : ''}" class="pill small ${list.some((p) => p.stage === s.name) ? 'h-due_soon' : ''}">${esc(s.name)} · ${list.filter((p) => p.stage === s.name).length}</span>`).join('')}</div>
+      <div class="pkg-stages">${stages[type].map((s) => `<span title="${esc(s.what)}${s.folder ? ` · folder: ${esc(s.folder)}` : ''}" class="pill small ${list.some((p) => p.stage === s.name) ? 'h-due_soon' : ''}">${esc(s.name)} · ${list.filter((p) => p.stage === s.name).length}</span>`).join('')}</div>
       <div class="list">${list.map((p) => `<div class="item">
         <span class="pill">${type === 'cor' ? `CO ${esc(p.number)}` : esc(p.spec_section)}</span>
         <div class="grow"><div class="title">${esc(p.title)}${p.amount ? ` <span class="mono" style="color:var(--gold)">$${Number(p.amount).toLocaleString()}</span>` : ''}</div>
           <div class="small dim mono">${esc(p.project_code || p.project_name || '')} · ${esc(p.folder || '')}</div></div>
+        ${type === 'cor' ? `<button class="btn sm" data-compile="${p.id}" title="Merge the CO form, pricing/backup, estimate, RFP/RFI reference and T&M tags into one PDF for the GC">📎 ${p.compiled_at ? 'Rebuild' : 'Build'} GC package</button>
+          ${p.package_path ? `<button class="btn sm gold" data-open="${esc(p.package_path)}">📄 Open</button>` : ''}` : ''}
         <select data-stage="${p.id}">${stages[type].map((s) => `<option ${s.name === p.stage ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>
       </div>`).join('') || '<div class="empty">None open. File a document with its number, or start one below.</div>'}</div></section>`;
   };
   return `<div class="grid two" style="margin-bottom:16px">${lane('cor', '💲 Change orders')}${lane('submittal', '📦 Submittal packages')}</div>
     <section class="panel" style="margin-bottom:16px"><h2>Start a package</h2>
-      <p class="small muted">Change orders follow the Job Control layout: <span class="mono">04 CHANGE ORDERS/1 PENDING/CO 073 - Title</span> with 01 ESTIMATE, 02 RFP-RFI REFERENCE, 03 T&amp;M TAGS,
-        04 APPROVED CO DOCUMENTATION and 05 QUOTES. Changing the stage moves the folder (PENDING → SUBMITTED → APPROVED) and reminds you to update the Job Control Workbook.
-        Submittals get 01 VENDOR DATA → 07 CLOSEOUT. Drop files in <span class="mono">Zordon/_Inbox</span> with the CO number or spec section and they land in the right place.</p>
+      <p class="small muted">Follows your job template: a change order becomes <span class="mono">04 CHANGE ORDERS/1 PENDING/CO 003 - …</span> (a copy of the CO folder template, with 01 ESTIMATE, 02 RFP-RFI REFERENCE, 03 T&amp;M TAGS, 04 APPROVED and 05 QUOTES by company) and
+        moves to SUBMITTED / APPROVED / REJECTED-VOID as its status changes; a submittal gets its spec folder <span class="mono">14 SUBMITTALS/26 2416 - …</span>.
+        Files dropped in <span class="mono">Zordon/_Inbox</span> with the CO number or spec section land in the right place, and each status puts the next step on your list.</p>
       <form class="form-grid" id="new-pkg" style="margin-top:10px">
-        <label class="field">Type<select name="type"><option value="cor">Change order (COR)</option><option value="submittal">Submittal</option></select></label>
+        <label class="field">Type<select name="type"><option value="cor">Change order (CO)</option><option value="submittal">Submittal</option></select></label>
         <label class="field">Project<select name="project_id" required>${options(store.projects, '', { empty: '—' })}</select></label>
-        <label class="field">CO #<input name="number" placeholder="073"></label>
+        <label class="field">CO # <span class="dim">(blank = next)</span><input name="number" placeholder="003"></label>
         <label class="field">Spec section<input name="spec_section" placeholder="26 24 16"></label>
         <label class="field">Title<input name="title" required placeholder="Ice and water machine power"></label>
         <label class="field">Amount ($)<input name="amount" type="number" step="0.01"></label>
@@ -424,10 +505,20 @@ async function meetings(el, _p, { render, openTask }) {
 
 // ---------------- Email intel ----------------
 async function inbox(el, params, { render }) {
-  const emails = await api('/api/emails');
+  const [emails, ib] = await Promise.all([api('/api/emails'), api('/api/inbox/status')]);
   const selected = params.get('id') ? await api(`/api/emails/${params.get('id')}`) : null;
+  const flow = ib.errors.length ? ['h-delayed', `Can't read ${ib.errors.length} file(s) in the inbox`]
+    : ib.waiting.length ? ['h-due_soon', `${ib.waiting.length} file(s) waiting`]
+      : ib.last_import ? ['h-done', `Last import ${new Date(ib.last_import.at).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}: ${ib.last_import.emails} email(s), ${ib.last_import.tasks} task(s)`]
+        : ['', 'Waiting for the hourly email check (workdays 5am–8pm)'];
   el.innerHTML = `
     <div class="page-head"><div><h1>Email Intel</h1><p>Paste an email — Zordon pulls out the tasks, meetings, RFIs and submittals. ${store.meta.ai ? '<span class="pill h-done">Claude on</span>' : '<span class="pill">Rule-based · add ANTHROPIC_API_KEY for Claude</span>'}</p></div></div>
+    <section class="panel" style="margin-bottom:16px">
+      <div class="row"><b>Hourly email check</b><span class="pill ${flow[0]}">${esc(flow[1])}</span><span class="spacer"></span>
+        <button class="btn" id="check-inbox">⟳ Check now</button></div>
+      <div class="small muted mono" style="margin-top:6px">${esc(ib.inbox)}${ib.checked_at ? ` · checked ${esc(new Date(ib.checked_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }))}` : ''}</div>
+      ${ib.errors.map((e) => `<div class="small" style="color:var(--red,#ff6b6b);margin-top:4px">${esc(e.file)}: ${esc(e.error)}</div>`).join('')}
+    </section>
     <div class="grid two">
       <div class="grid" style="align-content:start">
         <section class="panel"><h2>New email</h2>
@@ -443,6 +534,11 @@ async function inbox(el, params, { render }) {
       </div>
       <section class="panel" style="align-self:start" id="review">${selected ? review(selected) : '<div class="empty">Analyze or pick an email to review its suggestions.</div>'}</section>
     </div>`;
+  el.querySelector('#check-inbox').addEventListener('click', () => guard(async () => {
+    const r = await api('/api/inbox/check', { method: 'POST', body: {} });
+    toast(r.errors.length ? `Couldn't read ${r.errors.length} file(s) — see the note` : r.last_import ? `Imported ${r.last_import.tasks} task(s)` : 'Nothing new in the inbox');
+    render();
+  }));
   el.querySelector('#email-form').addEventListener('submit', (e) => {
     e.preventDefault();
     const btn = e.target.querySelector('button');
@@ -539,16 +635,24 @@ async function reminders(el, _p, { render }) {
 async function vault(el, params, { render }) {
   const f = Object.fromEntries(params);
   const qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString();
-  const [docs, categories, tasks, info] = await Promise.all([api(`/api/documents?${qs}`), api('/api/documents/categories'), api('/api/tasks?status='), api('/api/vault')]);
+  const [docs, categories, tasks, info, tpl] = await Promise.all([api(`/api/documents?${qs}`), api('/api/documents/categories'), api('/api/tasks?status='), api('/api/vault'), api('/api/template')]);
   const set = (k, v) => { const n = new URLSearchParams(f); if (v) n.set(k, v); else n.delete(k); location.hash = `#/vault?${n}`; };
   el.innerHTML = `
     <div class="page-head"><div><h1>File Vault</h1><p>Drop anything in. Zordon names it properly and files it by project and type, so you can find it months later.</p></div>
-      <div class="row"><button class="btn" id="mk-folders">📁 Create project folders</button><button class="btn primary" id="file-inbox">⚡ File _Inbox now</button></div></div>
+      <div class="row"><button class="btn primary" id="file-inbox">⚡ File _Inbox now</button></div></div>
     <section class="panel" style="margin-bottom:16px">
-      <div class="row"><span class="small muted">Vault folder</span><span class="mono">${esc(info.root)}</span></div>
-      <div class="row small muted" style="margin-top:6px">Save anything into <span class="mono">${esc(info.inbox)}</span> — it's renamed and filed within a minute.
-        Naming: <span class="mono">YYYY-MM-DD_JOB_Type_Description.ext</span> in <span class="mono">JOB-Project-Name/NN-Type/</span></div>
+      <header><h2>📐 Job template</h2>${tpl.found ? '<span class="pill h-done">● Following it</span>' : '<span class="pill h-due_soon">Not found</span>'}</header>
+      <div class="small muted mono">${esc(tpl.path)}</div>
+      <p class="small" style="margin-top:6px">${tpl.found
+        ? `${tpl.folders} folders${tpl.files ? `, ${tpl.files} forms/files` : ''}. Zordon checks it every 5 minutes: new jobs get a full copy, filing follows it, and FILING.md (for Claude) is rewritten when it changes.${tpl.checked_at ? ` Last checked ${esc(new Date(tpl.checked_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }))}.` : ''}`
+        : 'Zordon uses the standard GEC2 folders until this folder exists in OneDrive.'}</p>
       <div class="chips" style="margin-top:8px">${info.folders.map((x) => `<span class="chip">${esc(x)}</span>`).join('')}</div>
+      ${tpl.changes.length ? `<div class="small" style="margin-top:10px"><b>Recent template changes</b>${tpl.changes.slice(0, 3).map((c) => `<div class="dim">${esc(new Date(c.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))}: ${c.added.length ? `+ ${esc(c.added.slice(0, 4).join(', '))}${c.added.length > 4 ? ` +${c.added.length - 4} more` : ''}` : ''}${c.removed.length ? ` − ${esc(c.removed.slice(0, 3).join(', '))}` : ''}</div>`).join('')}</div>` : ''}
+      <div class="row" style="margin-top:10px"><button class="btn" id="tpl-check">⟳ Check template now</button>
+        <button class="btn" id="mk-folders" ${tpl.found ? '' : 'disabled'}>📁 Add missing template folders to all active jobs</button>
+        <span class="small dim">Adds folders only. Nothing is moved, renamed or overwritten.</span></div>
+      <div class="row small muted" style="margin-top:10px">Save anything into <span class="mono">${esc(info.inbox)}</span> and it's renamed and filed within a minute.
+        Names: <span class="mono">&lt;Job #&gt;_&lt;SHORT&gt; - TYPE - Description - YYYY-MM-DD.ext</span></div>
     </section>
     <div class="grid two">
       <section class="panel">
@@ -630,8 +734,13 @@ async function vault(el, params, { render }) {
     }));
   }));
   el.querySelector('#mk-folders').addEventListener('click', () => guard(async () => {
-    const r = await api('/api/vault/folders', { method: 'POST', body: {} });
-    toast(`Folder structure ready for ${r.projects.length} project(s)`);
+    const r = await api('/api/template/apply', { method: 'POST', body: {} });
+    toast(r.folders_added ? `Added ${r.folders_added} missing folder(s) across ${r.jobs.filter((j) => j.added).length} job(s)` : 'Every active job already has the template folders');
+  }));
+  el.querySelector('#tpl-check').addEventListener('click', () => guard(async () => {
+    const t = await api('/api/template/check', { method: 'POST', body: {} });
+    toast(t.found ? `Template: ${t.folders} folders` : 'Template folder not found in OneDrive');
+    render();
   }));
   el.querySelector('#file-inbox').addEventListener('click', () => guard(async () => {
     const filed = await api('/api/vault/inbox', { method: 'POST', body: {} });
@@ -827,4 +936,4 @@ async function claude(el, params, { render }) {
   el.querySelector('#copy-run').addEventListener('click', () => navigator.clipboard.writeText('Run my Zordon jobs.').then(() => toast('Copied — paste it into Claude Cowork')));
 }
 
-export const views = { claude, projects, doccontrol, schedule, meetings, inbox, reminders, vault, team };
+export const views = { claude, projects, onedrive, workbook, doccontrol, schedule, meetings, inbox, reminders, vault, team };
