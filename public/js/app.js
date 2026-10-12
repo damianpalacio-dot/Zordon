@@ -489,7 +489,7 @@ const routes = { command: commandView, focus: focusView, board: boardView, ...mo
 
 export async function render() {
   const [path, query = ''] = location.hash.replace(/^#\/?/, '').split('?');
-  const name = routes[path] ? path : 'command';
+  const name = routes[path] ? path : 'adviser';
   document.querySelectorAll('.sidebar a[data-view]').forEach((a) => a.classList.toggle('active', a.dataset.view === name));
   cleanup?.();
   cleanup = null;
@@ -522,6 +522,20 @@ async function refreshBadges() {
 }
 
 window.addEventListener('hashchange', () => { closeDrawer(); render(); });
+
+// The finance pages are the menu; the rest of Zordon stays available under "More tools" (remembered per computer).
+const moreToggle = document.getElementById('more-toggle');
+const moreTools = document.getElementById('more-tools');
+const setMore = (open) => {
+  moreTools.hidden = !open;
+  moreToggle.setAttribute('aria-expanded', String(open));
+  moreToggle.textContent = open ? 'Fewer tools' : 'More tools';
+  try { localStorage.setItem('zordon.more', open ? '1' : ''); } catch { /* storage blocked */ }
+};
+let moreOpen = false;
+try { moreOpen = localStorage.getItem('zordon.more') === '1'; } catch { /* storage blocked */ }
+setMore(moreOpen);
+moreToggle.addEventListener('click', () => setMore(moreTools.hidden));
 // Closing the center: Zordon says farewell (the server ignores it if the page reloads right away).
 window.addEventListener('pagehide', () => {
   let auth = '';

@@ -15,9 +15,10 @@ import { createVoiceSession, greeting, say, FAREWELL } from './voice.js';
 import { projectWeather } from './weather.js';
 import { scanOld, applyPlan, listArchiveLogs, undoArchive } from './cleanup.js';
 import { oneDriveStatus, listFolder, openOnComputer } from './onedrive.js';
-import { STAGES, packageType, stageFor, ensurePackage, coSubfolder, coLabel, specKey, recordPackage, setStage, listPackages } from './packages.js';
+import { STAGES, packageType, stageFor, ensurePackage, coSubfolder, coLabel, specKey, recordPackage, setStage, listPackages, WORKBOOK_FILE } from './packages.js';
 import { template, loadTemplate, copyTemplate, templateDir } from './template.js';
 import { compileCo } from './compile.js';
+import { askAdviser } from './adviser.js';
 import { TASK_CATEGORIES, CATEGORY_KEYS, categorize } from './categories.js';
 import { syncBoard, shareExistingTasks, syncStatus, BOARD_DIR } from './boardsync.js';
 import { findWorkbook, readWorkbook, readSheet } from './workbook.js';
@@ -763,6 +764,35 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
       if (!loadRoster(db, body)) throw new HttpError(409, 'Zordon already has your real data. Use scripts/reset-zordon.bat to start over.');
       writeRoster(db, vaultRoot).catch(() => {});
       return { people: db.prepare('SELECT COUNT(*) AS n FROM people').get().n, projects: db.prepare('SELECT COUNT(*) AS n FROM projects').get().n };
+    }],
+
+    // ----- Financial adviser -----
+    // Money at a glance: change orders by stage, billing / CO tasks, CO status changes not yet in the workbooks.
+    ['GET', '/api/finance', async () => {
+      const cos = listPackages(db, { type: 'cor' });
+      const stages = STAGES.cor.map((st) => {
+        const list = cos.filter((c) => c.stage === st.name);
+        return { stage: st.name, what: st.what, count: list.length, amount: list.reduce((n, c) => n + (Number(c.amount) || 0), 0) };
+      });
+      const money = listTasks(db, {}, today()).filter((t) => ['billing', 'change_order'].includes(t.category) && t.status !== 'done');
+      const log = vaultRoot ? await readFile(vaultPath(vaultRoot, WORKBOOK_FILE()), 'utf8').catch(() => '') : '';
+      const workbook_open = log.split('\n').filter((l) => l.startsWith('OPEN |'));
+      return {
+        ai: aiEnabled(), stages, change_orders: cos.slice(0, 50),
+        money_tasks: money.slice(0, 50), late: money.filter((t) => t.health === 'delayed').length,
+        due_soon: money.filter((t) => t.health === 'due_soon').length, workbook_open,
+      };
+    }],
+    ['POST', '/api/adviser', async ({ body }) => {
+      if (!aiEnabled()) {
+        return { ai: false, reply: 'The adviser needs Claude. Add ANTHROPIC_API_KEY=<your key> to the .env file next to Zordon (copy .env.example), then restart Zordon. Until then the money summary on this page still works.' };
+      }
+      try {
+        return { ai: true, ...(await askAdviser(body.messages, { db, vaultRoot, today: today(), me: mePersonId(db), createTask: (t) => createTask(db, t) })) };
+      } catch (err) {
+        if (err.status === 400 && /question/.test(err.message)) throw new HttpError(400, err.message);
+        throw new HttpError(502, `Claude could not answer: ${err.message}`);
+      }
     }],
 
     // ----- Change order & submittal packages -----

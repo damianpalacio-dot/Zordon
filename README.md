@@ -21,6 +21,36 @@ A project coordination hub for a construction PM, the APM, the project engineer 
 
 Change orders and billing are treated as cash flow: they're never below *High* priority, become *Critical* inside 3 days, and lead Zordon's briefing.
 
+
+## Financial adviser (start here)
+
+Zordon now opens on the **Adviser**: a money-first view of your jobs with Claude to think it through.
+
+- **Adviser:** change orders by stage with dollar totals, late and due-soon billing / CO tasks, and the CO status
+  changes still to enter in the Job Control Workbooks. Ask anything ("What approved work haven't I billed?", "Is CO 012
+  worth chasing?"). The adviser runs on Claude (Opus 5.5, adaptive thinking). Before it answers, it looks up your
+  tracked change orders, billing tasks, each job's Job Control Workbook (read-only) and the GEC2 skills. It can also
+  search the web and add a follow-up to your board. It never emails anyone and never edits the workbook. It needs
+  `ANTHROPIC_API_KEY` in `.env`.
+- **Change Orders**, **Billing**, **Job Control Workbook** and **Claude Link** are the menu. Everything else (Command
+  center, Board, RFIs & Submittals, Schedule, Meetings, Email, Reminders, OneDrive, File Vault, Rangers) is still there
+  under **More tools**. Nothing was removed.
+
+### How Zordon and the Job Control Workbook fit together
+
+| | Job Control Workbook (`.xlsm`, one per job) | Zordon |
+|---|---|---|
+| What it is | The official record: contract, CO values and status, billing / SOV | The assistant around it: folders, reminders, tasks, the adviser |
+| Who changes it | You, by hand in Excel | Zordon and Claude, automatically |
+| Change orders | The CO line, its amount and status | The CO folder on OneDrive, its stage, the GC package PDF, the follow-up tasks |
+| Reads the other? | No | Yes, read-only (never saves it or runs its macros) |
+
+A change order's life: you make the CO PDF from the workbook and drop it in `Zordon/_Inbox` (or Claude does). Zordon
+files it into `CO 0XX - <title>`, builds the GC package, and puts "Review and send" on your board. When you mark it
+submitted or approved, Zordon moves the folder, adds the follow-up or billing task, and adds an OPEN line to
+`_PENDING WORKBOOK UPDATES.txt`. That line reminds you to enter the same change in the workbook, because only you
+update the workbook. Claude (Cowork) does the skilled pieces: finding backup, building PDFs, drafting the GC email.
+
 ---
 
 ## Quick start

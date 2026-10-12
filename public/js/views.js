@@ -130,6 +130,104 @@ async function workbook(el, params) {
   el.querySelector('#wb-open')?.addEventListener('click', () => guard(() => api('/api/onedrive/open', { method: 'POST', body: { path: wb.path } })));
 }
 
+// ---------------- Financial adviser (home) ----------------
+// Money at a glance, plus a chat with Claude that can read the change orders, billing tasks and Job Control Workbooks.
+const ADVISER_KEY = 'zordon.adviser';
+const loadChat = () => { try { return JSON.parse(sessionStorage.getItem(ADVISER_KEY) || '[]'); } catch { return []; } };
+const saveChat = (m) => { try { sessionStorage.setItem(ADVISER_KEY, JSON.stringify(m.slice(-30))); } catch { /* storage blocked */ } };
+const money = (n) => (n ? `$${Number(n).toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '—');
+
+async function adviser(el) {
+  const f = await api('/api/finance');
+  const chat = loadChat();
+  const open = f.stages.filter((s) => ['PENDING', 'SUBMITTED', 'APPROVED'].includes(s.stage));
+  const suggestions = ['Which change orders are waiting on the GC the longest?', 'What approved work have I not billed yet?',
+    'What money items are due this week?', 'Summarize the Job Control Workbook for my biggest job.'];
+  const bubble = (m) => `<div class="msg ${m.role}">${m.role === 'assistant' ? md(m.content) : esc(m.content)}</div>`;
+  el.innerHTML = `
+    <div class="page-head"><div><h1>Financial adviser</h1><p>Change orders, billing and the Job Control Workbooks, with Claude to think them through.</p></div>
+      <div class="row"><a class="btn" href="#/workbook">📒 Job Control Workbook</a><a class="btn" href="#/board?category=billing">💵 Billing tasks</a></div></div>
+    <div class="grid kpis wide" style="margin-bottom:12px">
+      ${open.map((s) => `<a class="kpi" href="#/changeorders"><div><div style="font-size:16px;font-weight:600">${s.count} · ${money(s.amount)}</div><div class="l">CO ${esc(s.stage.toLowerCase())} — ${esc(s.what)}</div></div></a>`).join('')}
+      <a class="kpi h-delayed" href="#/board?category=billing"><div><div style="font-size:16px;font-weight:600">${f.late} late · ${f.due_soon} due soon</div><div class="l">Billing & CO tasks</div></div></a>
+      <a class="kpi a-yellow" href="#/changeorders"><div><div style="font-size:16px;font-weight:600">${f.workbook_open.length}</div><div class="l">CO changes to enter in the workbooks</div></div></a>
+    </div>
+    <div class="adviser-grid">
+      <section class="panel chat"><header><h2>Ask the adviser</h2>${chat.length ? '<button class="btn sm ghost" id="clear">New conversation</button>' : ''}</header>
+        <div class="msgs" id="msgs">${chat.map(bubble).join('') || `<div class="empty">${f.ai ? 'Ask about any job, change order, pay app or rate. The adviser looks up the real numbers first.' : 'Add ANTHROPIC_API_KEY to .env and restart Zordon to turn the adviser on.'}</div>`}</div>
+        <div class="chips" style="margin:8px 0">${suggestions.map((q) => `<button class="chip" data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div>
+        <form id="ask" class="row" style="flex-wrap:nowrap"><textarea name="q" rows="2" placeholder="e.g. Is CO 012 on G3249 worth chasing this week?" required></textarea><button class="btn primary">Ask</button></form>
+      </section>
+      <section class="panel"><header><h2>💲 Money to watch</h2><a class="small" href="#/board?category=billing">Board →</a></header>
+        <div class="list">${f.money_tasks.slice(0, 12).map((t) => `<div class="item" data-task="${t.id}"><div class="grow"><div class="title">${esc(t.title)}</div>
+          <div class="sub">${esc(t.project_name || '')}${t.due_date ? ` · due ${fmtDate(t.due_date)}` : ''}</div></div><span class="pill h-${t.health}">${esc(label(t.health))}</span></div>`).join('') || '<div class="empty">No open billing or change order tasks.</div>'}</div>
+        ${f.workbook_open.length ? `<h3 style="margin:14px 0 6px">Enter in the Job Control Workbook</h3><div class="list">${f.workbook_open.slice(0, 8).map((l) => `<div class="small mono">${esc(l.replace(/^OPEN \| /, ''))}</div>`).join('')}</div>` : ''}
+      </section>
+    </div>`;
+  const msgs = el.querySelector('#msgs');
+  msgs.scrollTop = msgs.scrollHeight;
+  const ask = async (q) => {
+    const history = [...loadChat(), { role: 'user', content: q }];
+    saveChat(history);
+    msgs.innerHTML = history.map(bubble).join('') + '<div class="msg assistant thinking">Thinking it through…</div>';
+    msgs.scrollTop = msgs.scrollHeight;
+    try {
+      const res = await api('/api/adviser', { method: 'POST', body: { messages: history } });
+      saveChat([...history, { role: 'assistant', content: res.reply }]);
+      if (res.tasks_added) toast(`${res.tasks_added} task(s) added to your board`);
+    } catch (err) {
+      saveChat([...history, { role: 'assistant', content: `Sorry, that didn't go through: ${err.message}` }]);
+    }
+    adviser(el);
+  };
+  el.querySelector('#ask').addEventListener('submit', (e) => { e.preventDefault(); const q = e.target.q.value.trim(); if (q) ask(q); });
+  el.querySelector('#ask textarea').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.target.form.requestSubmit(); } });
+  el.querySelectorAll('[data-q]').forEach((b) => b.addEventListener('click', () => ask(b.dataset.q)));
+  el.querySelector('#clear')?.addEventListener('click', () => { saveChat([]); adviser(el); });
+  el.querySelectorAll('[data-task]').forEach((n) => n.addEventListener('click', () => { location.hash = `#/board?category=billing`; }));
+}
+
+// Small, safe markdown for the adviser's answers: escape first, then bold, code, bullets, simple tables, paragraphs.
+function md(text) {
+  const lines = esc(text).split('\n');
+  const out = [];
+  let list = false;
+  let table = [];
+  const inline = (t) => t.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`([^`]+)`/g, '<code>$1</code>');
+  const flushTable = () => {
+    if (!table.length) return;
+    const rows = table.filter((r) => !/^\|?\s*:?-{2,}/.test(r)).map((r) => r.replace(/^\||\|$/g, '').split('|').map((c) => inline(c.trim())));
+    out.push(`<div class="table-wrap"><table style="min-width:0"><thead><tr>${rows[0].map((c) => `<th>${c}</th>`).join('')}</tr></thead><tbody>${rows.slice(1).map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
+    table = [];
+  };
+  for (const l of lines) {
+    if (/^\s*\|.*\|\s*$/.test(l)) { if (list) { out.push('</ul>'); list = false; } table.push(l.trim()); continue; }
+    flushTable();
+    const b = l.match(/^\s*(?:[-*•]|\d+\.)\s+(.*)$/);
+    if (b) { if (!list) { out.push('<ul>'); list = true; } out.push(`<li>${inline(b[1])}</li>`); continue; }
+    if (list) { out.push('</ul>'); list = false; }
+    const h = l.match(/^#{1,4}\s+(.*)$/);
+    if (h) out.push(`<p><b>${inline(h[1])}</b></p>`);
+    else if (l.trim()) out.push(`<p>${inline(l)}</p>`);
+  }
+  flushTable();
+  if (list) out.push('</ul>');
+  return out.join('');
+}
+
+// ---------------- Change orders ----------------
+async function changeorders(el, params, { render }) {
+  const pk = await api('/api/packages?type=cor');
+  const f = await api('/api/finance');
+  el.innerHTML = `
+    <div class="page-head"><div><h1>Change orders</h1><p>Every CO Zordon is tracking, by stage. Changing the stage moves the CO folder on OneDrive and logs the workbook update.</p></div></div>
+    ${packagesPanel({ packages: pk.packages.filter((p) => p.type === 'cor'), stages: pk.stages }, { only: 'cor' })}
+    ${f.workbook_open.length ? `<section class="panel" style="margin-top:12px"><header><h2>Still to enter in the Job Control Workbook</h2><span class="small dim">${esc(f.workbook_open.length)} open</span></header>
+      <div class="list">${f.workbook_open.map((l) => `<div class="small mono">${esc(l.replace(/^OPEN \| /, ''))}</div>`).join('')}</div>
+      <p class="small dim" style="margin-top:8px">Once it's in the .xlsm, change OPEN to DONE in <span class="mono">5. PROJECTS/Zordon/_PENDING WORKBOOK UPDATES.txt</span>, or tell Claude "CO 012 is in the workbook".</p></section>` : ''}`;
+  wirePackages(el, render);
+}
+
 // ---------------- RFIs & submittals ----------------
 async function doccontrol(el, params, { render }) {
   const f = Object.fromEntries(params);
@@ -209,6 +307,19 @@ async function doccontrol(el, params, { render }) {
     toast(results.map((r) => `${r.name}: ${r.error ? `error — ${r.error}` : r.skipped || `${r.fetched} items, ${r.changes.length} changes`}`).join(' · '));
     render();
   }));
+  wirePackages(el, render);
+  el.querySelector('#add-item').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const body = formData(e.target);
+    body.assigned_to_me = Boolean(body.assigned_to_me);
+    body.source = 'manual';
+    guard(async () => { await api('/api/items', { method: 'POST', body }); toast('Item added'); render(); });
+  });
+}
+
+
+// Stage changes, GC package builds and new folders, for the change order and RFIs & submittals pages.
+function wirePackages(el, render) {
   wire(el, '[data-stage]', 'change', (_e, n) => guard(async () => {
     const res = await api(`/api/packages/${n.dataset.stage}`, { method: 'PATCH', body: { stage: n.value } });
     toast(res.task_id ? `Moved to ${n.value} — next step added to your list` : `Moved to ${n.value}`);
@@ -226,17 +337,10 @@ async function doccontrol(el, params, { render }) {
     const body = formData(e.target);
     guard(async () => { const p = await api('/api/packages', { method: 'POST', body }); toast(`Folder ready: ${p.folder}`); render(); });
   });
-  el.querySelector('#add-item').addEventListener('submit', (e) => {
-    e.preventDefault();
-    const body = formData(e.target);
-    body.assigned_to_me = Boolean(body.assigned_to_me);
-    body.source = 'manual';
-    guard(async () => { await api('/api/items', { method: 'POST', body }); toast('Item added'); render(); });
-  });
 }
 
 // Change order and submittal packages: one folder each, moved stage by stage from start to billed / closeout.
-function packagesPanel({ packages, stages }) {
+function packagesPanel({ packages, stages }, { only = null } = {}) {
   const lane = (type, heading) => {
     const list = packages.filter((p) => p.type === type);
     return `<section class="panel"><header><h2>${heading}</h2><span class="small dim">${list.length} open</span></header>
@@ -250,16 +354,17 @@ function packagesPanel({ packages, stages }) {
         <select data-stage="${p.id}">${stages[type].map((s) => `<option ${s.name === p.stage ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>
       </div>`).join('') || '<div class="empty">None open. File a document with its number, or start one below.</div>'}</div></section>`;
   };
-  return `<div class="grid two" style="margin-bottom:16px">${lane('cor', '💲 Change orders')}${lane('submittal', '📦 Submittal packages')}</div>
-    <section class="panel" style="margin-bottom:16px"><h2>Start a package</h2>
+  const lanes = only === 'cor' ? lane('cor', '💲 Change orders') : `<div class="grid two">${lane('cor', '💲 Change orders')}${lane('submittal', '📦 Submittal packages')}</div>`;
+  return `<div style="margin-bottom:16px">${lanes}</div>
+    <section class="panel" style="margin-bottom:16px"><h2>${only === 'cor' ? 'Start a change order' : 'Start a package'}</h2>
       <p class="small muted">Follows your job template: a change order becomes <span class="mono">04 CHANGE ORDERS/1 PENDING/CO 003 - …</span> (a copy of the CO folder template, with 01 ESTIMATE, 02 RFP-RFI REFERENCE, 03 T&amp;M TAGS, 04 APPROVED and 05 QUOTES by company) and
-        moves to SUBMITTED / APPROVED / REJECTED-VOID as its status changes; a submittal gets its spec folder <span class="mono">14 SUBMITTALS/26 2416 - …</span>.
+        moves to SUBMITTED / APPROVED / REJECTED-VOID as its status changes${only === 'cor' ? '' : '; a submittal gets its spec folder <span class="mono">14 SUBMITTALS/26 2416 - …</span>'}.
         Files dropped in <span class="mono">Zordon/_Inbox</span> with the CO number or spec section land in the right place, and each status puts the next step on your list.</p>
       <form class="form-grid" id="new-pkg" style="margin-top:10px">
-        <label class="field">Type<select name="type"><option value="cor">Change order (CO)</option><option value="submittal">Submittal</option></select></label>
+        <label class="field">Type<select name="type"><option value="cor">Change order (CO)</option>${only === 'cor' ? '' : '<option value="submittal">Submittal</option>'}</select></label>
         <label class="field">Project<select name="project_id" required>${options(store.projects, '', { empty: '—' })}</select></label>
         <label class="field">CO # <span class="dim">(blank = next)</span><input name="number" placeholder="003"></label>
-        <label class="field">Spec section<input name="spec_section" placeholder="26 24 16"></label>
+        ${only === 'cor' ? '' : '<label class="field">Spec section<input name="spec_section" placeholder="26 24 16"></label>'}
         <label class="field">Title<input name="title" required placeholder="Ice and water machine power"></label>
         <label class="field">Amount ($)<input name="amount" type="number" step="0.01"></label>
         <button class="btn primary">Create folder</button>
@@ -936,4 +1041,4 @@ async function claude(el, params, { render }) {
   el.querySelector('#copy-run').addEventListener('click', () => navigator.clipboard.writeText('Run my Zordon jobs.').then(() => toast('Copied — paste it into Claude Cowork')));
 }
 
-export const views = { claude, projects, onedrive, workbook, doccontrol, schedule, meetings, inbox, reminders, vault, team };
+export const views = { adviser, changeorders, claude, projects, onedrive, workbook, doccontrol, schedule, meetings, inbox, reminders, vault, team };
