@@ -8,7 +8,7 @@
 //   14 SUBMITTALS/26 2416 - PANELBOARDS   one folder per CSI spec section; submittal status is tracked in Zordon.
 import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { addDays, isoDate } from './db.js';
-import { CATEGORY_FOLDERS, cleanName, projectsDir, titleCase, vaultPath } from './vault.js';
+import { CATEGORY_FOLDERS, cleanName, projectFolder, projectsDir, titleCase, vaultPath } from './vault.js';
 import { coLayout, copyTemplate } from './template.js';
 
 const CO_KEYS = ['PENDING', 'SUBMITTED', 'APPROVED', 'BILLED', 'REJECTED'];
@@ -304,10 +304,61 @@ export async function noteWorkbookUpdate(root, { job, number, stage, title }, to
   const rel = WORKBOOK_FILE();
   const line = `OPEN | ${today} | ${job} | ${coLabel(number)} | ${stage} | ${title}\n`;
   const current = await readFile(vaultPath(root, rel), 'utf8').catch(() => null);
-  if (current?.includes(`| ${job} | ${coLabel(number)} | ${stage} |`)) return rel;
+  // Claude (co-update skill) may already have logged the same change in its own wording: one line per change.
+  const n = Number(number);
+  const word = { REJECTED: /reject|void/i, SUBMITTED: /submit/i, APPROVED: /approv/i }[stage] || new RegExp(stage, 'i');
+  const same = (l) => /^\s*OPEN\b/i.test(l) && (!job || l.toUpperCase().includes(String(job).toUpperCase()))
+    && new RegExp(`\\bCO\\s*#?\\s*0*${n}\\b`, 'i').test(l) && word.test(l);
+  if (current?.split('\n').some(same)) return rel;
   await mkdir(vaultPath(root, rel, '..'), { recursive: true });
   const next = current === null ? `${WORKBOOK_HEADER}${line}---- DONE ----\n`
     : current.includes('---- DONE ----') ? current.replace('---- DONE ----', `${line}---- DONE ----`) : `${current}${line}`;
   await writeFile(vaultPath(root, rel), next);
   return rel;
+}
+
+// ---------- Following the CO folders on OneDrive ----------
+// Claude (Job Control app, co-update skill) creates CO folders and moves them between stage folders without telling
+// Zordon. Every few minutes Zordon looks at each job's 04 CHANGE ORDERS and follows along:
+//   - a CO folder it hasn't seen is recorded quietly at the stage its folder is in (no tasks, no package build:
+//     Claude already built the package);
+//   - a CO folder that moved to another stage folder updates the stage and adds the next steps and the workbook
+//     reminder, the same as changing the stage in Zordon. Nothing is moved, renamed or written into the CO folder.
+export async function scanCoFolders(db, root, { today = isoDate(), me = null, addTask = null } = {}) {
+  const result = { jobs: 0, found: 0, added: [], moved: [], checked_at: new Date().toISOString() };
+  if (!root) return result;
+  const layout = coLayout();
+  const jobs = db.prepare("SELECT * FROM projects WHERE status != 'closed' AND code IS NOT NULL AND code != ''").all();
+  for (const job of jobs) {
+    const base = `${projectFolder(job)}/${layout.base}`;
+    if (!(await exists(root, base))) continue;
+    result.jobs++;
+    for (const st of layout.stages) {
+      for (const name of await dirs(root, `${base}/${st.name}`)) {
+        if (name.startsWith('_')) continue; // _CO FOLDER TEMPLATE (DUPLICATE ME)
+        const m = cleanName(name, 120).match(/^(?:CO|COR|PCO|CR|CHANGE ORDER)\s*#?\s*0*(\d{1,4})\b\s*(?:\([^)]*\))?\s*[-–:]*\s*(.*)$/i);
+        if (!m) continue;
+        result.found++;
+        const number = corNumber(m[1]);
+        const folder = `${base}/${st.name}/${name}`;
+        const prev = findPackage(db, job.id, 'cor', { number });
+        if (!prev) {
+          recordPackage(db, { project_id: job.id, type: 'cor', number, title: m[2] || `Change Order ${number}`, folder, stage: st.key }, today);
+          result.added.push(`${job.code} ${coLabel(number)}`);
+          continue;
+        }
+        if (prev.folder !== folder) {
+          db.prepare('UPDATE packages SET folder = ? WHERE id = ?').run(folder, prev.id);
+          if (prev.folder) db.prepare('UPDATE documents SET path = ? || substr(path, ?) WHERE substr(path, 1, ?) = ?').run(folder, prev.folder.length + 1, prev.folder.length + 1, `${prev.folder}/`);
+        }
+        // BILLED lives in the APPROVED folder; anything else follows the folder.
+        const stageNow = prev.stage === 'BILLED' && st.key === 'APPROVED' ? 'BILLED' : st.key;
+        if (stageNow !== prev.stage) {
+          await setStage(db, prev.id, stageNow, { force: true, today, me, addTask, root });
+          result.moved.push(`${job.code} ${coLabel(number)}: ${prev.stage} → ${stageNow}`);
+        }
+      }
+    }
+  }
+  return result;
 }

@@ -45,7 +45,13 @@ Zordon now opens on the **Adviser**: a money-first view of your jobs with Claude
 | Change orders | The CO line, its amount and status | The CO folder on OneDrive, its stage, the GC package PDF, the follow-up tasks |
 | Reads the other? | No | Yes, read-only (never saves it or runs its macros) |
 
-A change order's life: you make the CO PDF from the workbook and drop it in `Zordon/_Inbox` (or Claude does). Zordon
+**Zordon follows the change order folders by itself.** Every 3 minutes (and on Change Orders → **Check OneDrive now**)
+it reads each job's `04 CHANGE ORDERS` folder. When Claude or the Job Control app creates a CO folder, Zordon starts
+tracking it. When Claude moves a CO folder to `2 SUBMITTED` or `3 APPROVED`, Zordon updates the CO and adds the follow-up,
+billing and workbook reminders. Nobody has to drop anything anywhere, and Zordon never rebuilds a package Claude
+already made.
+
+A change order made outside the Job Control app: drop the CO PDF in `Zordon/_Inbox` and Zordon
 files it into `CO 0XX - <title>`, builds the GC package, and puts "Review and send" on your board. When you mark it
 submitted or approved, Zordon moves the folder, adds the follow-up or billing task, and adds an OPEN line to
 `_PENDING WORKBOOK UPDATES.txt`. That line reminds you to enter the same change in the workbook, because only you

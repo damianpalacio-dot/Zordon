@@ -119,3 +119,43 @@ test('pay apps and purchase orders go where the GEC2 template keeps them', async
   const loi = await fileDocument(db, root, { buffer: Buffer.from('x'), filename: 'loi.pdf', project_id: 1, hint: 'LOI Acme Fire Alarm' }, TODAY);
   assert.match(pathOf(db, loi.id), /06 PURCHASE ORDERS\/ACME FIRE ALARM\/LOI-NTP\//);
 });
+
+test('Zordon follows CO folders that Claude creates and moves on OneDrive', async () => {
+  const { scanCoFolders } = await import('../server/packages.js');
+  const { rename } = await import('node:fs/promises');
+  const root = await oneDrive();
+  const db = freshDb();
+  const addTask = (t) => Number(db.prepare(`INSERT INTO tasks (project_id, title, owner_id, priority, due_date, source, source_ref)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`).run(t.project_id, t.title, t.owner_id, t.priority, t.due_date, t.source, t.source_ref).lastInsertRowid);
+  // What Claude leaves behind: a filled CO in 1 PENDING, an approved one, the next ready folder, the folder template.
+  await mkdir(join(root, PENDING, 'CO 013 - Bus Tap (RFI 63)'), { recursive: true });
+  await mkdir(join(root, PENDING, '_CO FOLDER TEMPLATE (DUPLICATE ME)'), { recursive: true });
+  await mkdir(join(root, CO, '3 APPROVED', 'CO 009 - Added Outlets'), { recursive: true });
+  await mkdir(join(root, CO, 'CO 014'), { recursive: true });
+
+  const first = await scanCoFolders(db, root, { today: TODAY, me: 1, addTask });
+  assert.deepEqual(first.added.sort(), ['G2707 CO 009', 'G2707 CO 013']);
+  assert.equal(first.found, 2, 'the ready folder and the template are not change orders');
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n, 0, 'existing COs are recorded quietly');
+  const co13 = () => listPackages(db).find((p) => p.number === '013');
+  assert.equal(co13().stage, 'PENDING');
+  assert.equal(co13().title, 'Bus Tap (RFI 63)');
+
+  // Claude sends CO 013 and moves its folder, and logs the workbook line in its own words.
+  await mkdir(join(root, CO, '2 SUBMITTED (awaiting GC-owner approval)'), { recursive: true });
+  await rename(join(root, PENDING, 'CO 013 - Bus Tap (RFI 63)'), join(root, CO, '2 SUBMITTED (awaiting GC-owner approval)', 'CO 013 - Bus Tap (RFI 63)'));
+  await mkdir(join(root, '5. PROJECTS/Zordon'), { recursive: true });
+  await writeFile(join(root, '5. PROJECTS/Zordon/_PENDING WORKBOOK UPDATES.txt'), 'OPEN  G2707  CO 013  Submitted to GC  2026-10-03\n');
+  const second = await scanCoFolders(db, root, { today: TODAY, me: 1, addTask });
+  assert.deepEqual(second.moved, ['G2707 CO 013: PENDING → SUBMITTED']);
+  assert.match(co13().folder, /2 SUBMITTED/);
+  assert.ok(db.prepare("SELECT 1 FROM tasks WHERE title LIKE 'Follow up with the GC for approval of CO 013%'").get());
+  const log = await readFile(join(root, '5. PROJECTS/Zordon/_PENDING WORKBOOK UPDATES.txt'), 'utf8');
+  assert.equal(log.match(/CO 013/g).length, 1, 'no second line when Claude already logged it');
+
+  // Billed in Zordon stays billed while its folder sits in 3 APPROVED; a quiet scan changes nothing.
+  db.prepare("UPDATE packages SET stage = 'BILLED' WHERE number = '009'").run();
+  const third = await scanCoFolders(db, root, { today: TODAY, me: 1, addTask });
+  assert.deepEqual([third.added, third.moved], [[], []]);
+  assert.equal(listPackages(db).find((p) => p.number === '009').stage, 'BILLED');
+});

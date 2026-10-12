@@ -102,7 +102,10 @@ Unknown job? Save to \`Zordon/_Unfiled\` and say so.
   in parentheses: \`CO 003 (GC PCO-012) - Additional Lighting Circuits\`.
 - Inside: ${co.subfolders.map((x) => `\`${x}\``).join(', ')}.
 - Files inside carry the CO number (\`CO 003 - T&M Tag - 2026-10-04.pdf\`).
-- **The CO form from the Job Control Workbook:** when Damian makes the CO PDF, copy it unchanged into \`Zordon/_Inbox\`.
+- **Zordon follows the CO folders by itself.** Every 3 minutes it reads each job's \`${co.base}\`: a new CO folder is
+  tracked, and a CO folder moved to another status folder updates its status and next steps. When you (Claude) build
+  a CO package for the Job Control app and save it in the CO folder, you don't need to copy anything to \`Zordon/_Inbox\`.
+- **A CO form PDF with no folder yet** (Damian made it from the workbook outside the Job Control app): copy it unchanged into \`Zordon/_Inbox\`.
   Zordon creates (or finds) \`CO 001 - <description>\` (the description is whatever follows "CO 001" in the file name,
   so the job number and job name drop off), puts the form at the top of the CO folder, and builds the package for the
   GC: \`CO 001 - G3249 - <description>.pdf\` = CO form + RFP/RFI reference + material sheets (estimate) + vendor quotes
