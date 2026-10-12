@@ -192,7 +192,7 @@ test('file names follow the convention', () => {
   assert.equal(name({ filename: 'x.pdf', hint: 'RFI 9 conduit', project_id: 2 }).folder, '5. PROJECTS/LAUSD 32ND ST/07 RFIS');
   delete projects[1].folder;
   assert.equal(sub.filename, 'G3251_32ND ST - SUBMITTAL - Spec 26 2416 Sub 01 - Panelboards Siemens (10.03.2026).pdf');
-  assert.equal(name({ filename: 'x.pdf', hint: 'Pay app 6 backup', project_id: 2 }).folder, '5. PROJECTS/G3251/01 COST CONTROL');
+  assert.equal(name({ filename: 'x.pdf', hint: 'Pay app 6 backup', project_id: 2 }).folder, '5. PROJECTS/G3251/01 COST CONTROL/05 PAYMENT APPLICATIONS (MONTHLY BILLING)');
   assert.equal(slug('Pay app #6 — backup (final)'), 'Pay-App-6-Backup-Final');
 });
 
@@ -209,7 +209,7 @@ test('_Inbox files are renamed and filed', async () => {
   assert.equal(filed.length, 1);
   const doc = db.prepare('SELECT * FROM documents WHERE id = ?').get(filed[0].id);
   assert.equal(doc.category, 'COR');
-  assert.match(doc.path, /^5\. PROJECTS\/AGM-101\/01 COST CONTROL\/CHANGE ORDERS\/COR 007 - Pricing for Added Outlets\/AGM-101_ANGEL GROVE MEDICAL - COR 7 - Pricing for Added Outlets \(10\.03\.2026\)\.txt$/);
+  assert.equal(doc.path, '5. PROJECTS/AGM-101/01 COST CONTROL/04 CHANGE ORDERS/1 PENDING (not yet submitted to GC)/CO 007 - Pricing for Added Outlets/CO 007 - AGM-101 - Pricing for Added Outlets.txt');
   assert.deepEqual(await readdir(join(root, 'Zordon', '_Inbox')), []);
 });
 

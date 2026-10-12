@@ -161,9 +161,9 @@ function packagesPanel({ packages, stages }) {
   const lane = (type, heading) => {
     const list = packages.filter((p) => p.type === type);
     return `<section class="panel"><header><h2>${heading}</h2><span class="small dim">${list.length} open</span></header>
-      <div class="pkg-stages">${stages[type].map((s) => `<span title="${esc(s.what)}" class="pill small ${list.some((p) => p.stage === s.name) ? 'h-due_soon' : ''}">${esc(s.name)} · ${list.filter((p) => p.stage === s.name).length}</span>`).join('')}</div>
+      <div class="pkg-stages">${stages[type].map((s) => `<span title="${esc(s.what)}${s.folder ? ` · ${esc(s.folder)}` : ''}" class="pill small ${list.some((p) => p.stage === s.name) ? 'h-due_soon' : ''}">${esc(s.name)} · ${list.filter((p) => p.stage === s.name).length}</span>`).join('')}</div>
       <div class="list">${list.map((p) => `<div class="item">
-        <span class="pill">${type === 'cor' ? `COR ${esc(p.number)}` : esc(p.spec_section)}</span>
+        <span class="pill">${type === 'cor' ? `CO ${esc(p.number)}` : esc(p.spec_section)}</span>
         <div class="grow"><div class="title">${esc(p.title)}${p.amount ? ` <span class="mono" style="color:var(--gold)">$${Number(p.amount).toLocaleString()}</span>` : ''}</div>
           <div class="small dim mono">${esc(p.project_code || p.project_name || '')} · ${esc(p.folder || '')}</div></div>
         <select data-stage="${p.id}">${stages[type].map((s) => `<option ${s.name === p.stage ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>
@@ -171,12 +171,13 @@ function packagesPanel({ packages, stages }) {
   };
   return `<div class="grid two" style="margin-bottom:16px">${lane('cor', '💲 Change orders')}${lane('submittal', '📦 Submittal packages')}</div>
     <section class="panel" style="margin-bottom:16px"><h2>Start a package</h2>
-      <p class="small muted">Creates the folder with every stage inside (CORs: 01 BACKUP → 07 BILLED; submittals: 01 VENDOR DATA → 07 CLOSEOUT).
-        Files you drop in <span class="mono">Zordon/_Inbox</span> with the COR number or spec section land in the right stage, and each stage puts the next step on your list.</p>
+      <p class="small muted">Change orders follow the Job Control layout: <span class="mono">04 CHANGE ORDERS/1 PENDING/CO 073 - Title</span> with 01 ESTIMATE, 02 RFP-RFI REFERENCE, 03 T&amp;M TAGS,
+        04 APPROVED CO DOCUMENTATION and 05 QUOTES. Changing the stage moves the folder (PENDING → SUBMITTED → APPROVED) and reminds you to update the Job Control Workbook.
+        Submittals get 01 VENDOR DATA → 07 CLOSEOUT. Drop files in <span class="mono">Zordon/_Inbox</span> with the CO number or spec section and they land in the right place.</p>
       <form class="form-grid" id="new-pkg" style="margin-top:10px">
         <label class="field">Type<select name="type"><option value="cor">Change order (COR)</option><option value="submittal">Submittal</option></select></label>
         <label class="field">Project<select name="project_id" required>${options(store.projects, '', { empty: '—' })}</select></label>
-        <label class="field">COR #<input name="number" placeholder="073"></label>
+        <label class="field">CO #<input name="number" placeholder="073"></label>
         <label class="field">Spec section<input name="spec_section" placeholder="26 24 16"></label>
         <label class="field">Title<input name="title" required placeholder="Ice and water machine power"></label>
         <label class="field">Amount ($)<input name="amount" type="number" step="0.01"></label>

@@ -13,11 +13,11 @@ import { connectorStatus, syncAll } from './connectors.js';
 import { createVoiceSession, greeting, say, FAREWELL } from './voice.js';
 import { projectWeather } from './weather.js';
 import { scanOld, applyPlan, listArchiveLogs, undoArchive } from './cleanup.js';
-import { STAGES, packageType, stageFor, ensurePackage, stageFolder, specKey, recordPackage, setStage, listPackages } from './packages.js';
+import { STAGES, packageType, stageFor, ensurePackage, partFolder, specKey, recordPackage, applyStage, listPackages, ensureChangeOrders, corNumber } from './packages.js';
 import { leadTime, createElectricalPlan, LEAD_TIMES } from './electrical.js';
 import { loadBuiltinSkills, listSkills, saveSkill, createJob, listJobs, syncControl, importJobResult, filingRules,
   importProposal, decideProposal, listProposals } from './claude.js';
-import { CATEGORY_NAMES, CATEGORY_FOLDERS, suggestName, finalize, textSnippet, uniquePath, saveFile, moveFile, deleteFile, vaultPath,
+import { CATEGORY_NAMES, CATEGORY_FOLDERS, cleanName, suggestName, finalize, textSnippet, uniquePath, saveFile, moveFile, deleteFile, vaultPath,
   ensureProjectFolders, inboxFiles, readVaultFile, projectFolder, isJobNumber, JOB_TEMPLATE, CONTROL_DIR, INBOX, findJobFolder, refineFolder, detectVault } from './vault.js';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -134,6 +134,12 @@ function acceptEmail(db, id, { tasks = [], meetings = [] }) {
   return created;
 }
 
+// GEC2 job folders, the change orders stage folders and the ready CO folder for the next number.
+async function jobFolders(vaultRoot, project) {
+  await ensureProjectFolders(vaultRoot, project);
+  await ensureChangeOrders(vaultRoot, projectFolder(project));
+}
+
 const fileExists = (p) => stat(p).then(() => true, () => false);
 const docSelect = `SELECT d.*, pr.name AS project_name, pr.code AS project_code, t.title AS task_title
   FROM documents d LEFT JOIN projects pr ON pr.id = d.project_id LEFT JOIN tasks t ON t.id = d.task_id`;
@@ -160,20 +166,25 @@ export async function fileDocument(db, vaultRoot, { buffer, fromRel, filename, p
   if (project) {
     const full = db.prepare('SELECT * FROM projects WHERE id = ?').get(project.id);
     pkg = await packageFor(db, vaultRoot, full, chosen, hay, today);
-    chosen.folder = pkg ? pkg.folder : await refineFolder(vaultRoot, chosen.folder, projectFolder(full), hay);
+    if (pkg) {
+      chosen.folder = pkg.folder;
+      if (pkg.filename) chosen.filename = pkg.filename;
+    } else {
+      chosen.folder = await gec2Subfolder(vaultRoot, await refineFolder(vaultRoot, chosen.folder, projectFolder(full), hay), chosen.category, hay, today);
+    }
   }
   const rel = await uniquePath(vaultRoot, chosen.folder, chosen.filename, fileExists);
   if (fromRel) await moveFile(vaultRoot, fromRel, rel);
   else await saveFile(vaultRoot, rel, content);
-  if (pkg?.stage) setStage(db, pkg.id, pkg.stage, { today, me: mePersonId(db), addTask: (t) => createTask(db, t) });
   const id = db.prepare(`INSERT INTO documents (project_id, task_id, title, category, original_name, path, size, mime, notes)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(chosen.project_id, task_id ? Number(task_id) : null, chosen.title, chosen.category,
     filename, rel, content.length, mime || null, notes || null).lastInsertRowid;
   return { id: Number(id), analyzer: suggestion.analyzer };
 }
 
-// A COR with a number, or a submittal with a spec section, goes into its own package folder and stage:
-// 01 COST CONTROL/CHANGE ORDERS/COR 073 - <title>/05 SUBMITTED. Returns null for everything else.
+// A COR with a number, or a submittal with a spec section, goes into its own package folder. A change order lands in
+// the GEC2 Job Control layout: 01 COST CONTROL/04 CHANGE ORDERS/<stage folder>/CO 073 - <title>/05 QUOTES/VENDORS,
+// named "CO 073 - Vendor Quote - <description>.pdf". Returns null for everything else.
 async function packageFor(db, vaultRoot, project, chosen, hay, today) {
   const type = packageType(chosen.category);
   if (!type) return null;
@@ -181,10 +192,41 @@ async function packageFor(db, vaultRoot, project, chosen, hay, today) {
   const number = type === 'cor' ? chosen.title.match(/^COR (\d+)\b/)?.[1] : null;
   const spec_section = type === 'submittal' ? specKey(hay) : null;
   if (type === 'cor' ? !number : !spec_section) return null;
-  const folder = await ensurePackage(vaultRoot, projectFolder(project), type, { number, spec_section, title: desc });
   const stage = stageFor(type, hay);
-  const rec = recordPackage(db, { project_id: project.id, type, number, spec_section, title: desc, folder }, today);
-  return { id: rec.id, stage, folder: await stageFolder(vaultRoot, folder, stage) };
+  const existing = db.prepare('SELECT stage FROM packages WHERE project_id = ? AND type = ? AND (number = ? OR spec_section = ?)')
+    .get(project.id, type, number ? corNumber(number) : '', spec_section || '');
+  const folder = await ensurePackage(vaultRoot, projectFolder(project), type, { number, spec_section, title: desc }, existing?.stage || stage);
+  // An existing CO folder's own description ("CO 073 - Ice and Water Machine") names the package.
+  const named = type === 'cor' ? folder.split('/').pop().match(/^[^-]*\d\s+-\s+(.+)$/)?.[1] : null;
+  const rec = recordPackage(db, { project_id: project.id, type, number, spec_section, title: named || desc, folder }, today);
+  const opts = { today, me: mePersonId(db), addTask: (t) => createTask(db, t) };
+  const res = stage ? await applyStage(db, vaultRoot, rec.id, stage, opts) : await applyStage(db, vaultRoot, rec.id, rec.stage, { ...opts, initial: true });
+  const where = await partFolder(vaultRoot, res.package.folder, type, { stage, hay });
+  if (type !== 'cor') return { id: rec.id, folder: where.folder };
+  const ext = chosen.filename.match(/\.[^.]+$/)?.[0] || '';
+  const co = `CO ${corNumber(number)}`;
+  const filename = where.label
+    ? `${co} - ${where.label} - ${desc || 'Document'}${ext}`
+    : `${co} - ${cleanName(project.code || project.name, 40)} - ${desc || 'Change Order'}${ext}`;
+  return { id: rec.id, folder: where.folder, filename: cleanName(filename, 150) };
+}
+
+// GEC2 subfolders for documents that aren't part of a CO or submittal package:
+//   Pay apps:  05 PAYMENT APPLICATIONS (MONTHLY BILLING)/PENCIL DRAFT (submitted)|APPROVED/<year>/<MM Month>
+//   POs, LOIs, NTPs, sub quotes: 06 PURCHASE ORDERS/<company>/QUOTES|LOI-NTP|PURCHASE ORDER (when the company folder exists)
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+async function gec2Subfolder(vaultRoot, folder, category, hay, today) {
+  if (category === 'Pay App' && /05 PAYMENT APPLICATIONS/.test(folder)) {
+    const kind = /pencil|draft/i.test(hay) ? 'PENCIL DRAFT (submitted)' : /approved|final|executed|signed/i.test(hay) ? 'APPROVED' : null;
+    if (!kind) return folder;
+    const [y, m] = today.split('-');
+    return `${folder}/${kind}/${y}/${m} ${MONTHS[Number(m) - 1]}`;
+  }
+  if (category === 'Purchase Order' && /06 PURCHASE ORDERS\/[^/]+$/.test(folder)) {
+    return `${folder}/${/\bloi\b|letter of intent|\bntp\b|notice to proceed/i.test(hay) && !/purchase order issued/i.test(hay) ? 'LOI-NTP'
+      : /quote|quotation|proposal/i.test(hay) ? 'QUOTES' : 'PURCHASE ORDER'}`;
+  }
+  return folder;
 }
 
 // A batch of already-analyzed emails, written to the vault's _Inbox by the hourly Claude email check.
@@ -414,7 +456,7 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
       await linkJobFolders(db, vaultRoot).catch(() => {});
       const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
       // Real GEC2 jobs (G####) get the job start-up folders; other projects are left alone.
-      if (isJobNumber(project.code)) await ensureProjectFolders(vaultRoot, project).catch((err) => console.warn(`[vault] ${err.message}`));
+      if (isJobNumber(project.code)) await jobFolders(vaultRoot, project).catch((err) => console.warn(`[vault] ${err.message}`));
       return project;
     }],
     ['PATCH', '/api/projects/:id', async ({ params, body }) => {
@@ -528,7 +570,7 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
     }],
     ['POST', '/api/vault/folders', async () => {
       const projects = db.prepare("SELECT * FROM projects WHERE status != 'closed'").all().filter((p) => isJobNumber(p.code));
-      for (const p of projects) await ensureProjectFolders(vaultRoot, p);
+      for (const p of projects) await jobFolders(vaultRoot, p);
       return { root: vaultRoot, projects: projects.map((p) => projectFolder(p)), folders: JOB_TEMPLATE };
     }],
     // ----- Archive old files (moves only, logged, undoable) -----
@@ -584,7 +626,7 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
     // ----- Change order & submittal packages -----
     ['GET', '/api/packages', ({ query }) => ({
       packages: listPackages(db, { ...query, open: query.open === '1' }),
-      stages: Object.fromEntries(Object.entries(STAGES).map(([k, v]) => [k, v.map(([name, what]) => ({ name, what }))])),
+      stages: Object.fromEntries(Object.entries(STAGES).map(([k, v]) => [k, v.map(([name, what, , folder]) => ({ name, what, folder: folder || null }))])),
     })],
     // Start a package by hand: creates the folder with every stage subfolder and starts tracking it.
     ['POST', '/api/packages', async ({ body }) => {
@@ -593,13 +635,14 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
       if (type === 'cor' && !/^\d+$/.test(String(body.number || '').trim())) throw Object.assign(new Error('COR number is required'), { status: 400 });
       if (type === 'submittal' && !specKey(body.spec_section)) throw Object.assign(new Error('Spec section is required (e.g. 26 24 16)'), { status: 400 });
       const info = { number: String(body.number || '').trim(), spec_section: body.spec_section, title: required(body.title, 'title') };
-      const folder = await ensurePackage(vaultRoot, projectFolder(project), type, info);
+      const folder = await ensurePackage(vaultRoot, projectFolder(project), type, info, body.stage);
       const pkg = recordPackage(db, { project_id: project.id, type, ...info, folder, amount: body.amount ? Number(body.amount) : null }, today());
-      return body.stage ? setStage(db, pkg.id, body.stage, { today: today(), me: mePersonId(db), addTask: (t) => createTask(db, t) }).package : pkg;
+      const opts = { today: today(), me: mePersonId(db), addTask: (t) => createTask(db, t) };
+      return (await applyStage(db, vaultRoot, pkg.id, body.stage || pkg.stage, { ...opts, initial: !body.stage })).package;
     }],
-    ['PATCH', '/api/packages/:id', ({ params, body }) => {
+    ['PATCH', '/api/packages/:id', async ({ params, body }) => {
       if (body.amount !== undefined) db.prepare('UPDATE packages SET amount = ? WHERE id = ?').run(body.amount === '' ? null : Number(body.amount), Number(params.id));
-      return setStage(db, Number(params.id), body.stage ?? mustExist(db.prepare('SELECT stage FROM packages WHERE id = ?').get(Number(params.id)), 'Package').stage,
+      return applyStage(db, vaultRoot, Number(params.id), body.stage ?? mustExist(db.prepare('SELECT stage FROM packages WHERE id = ?').get(Number(params.id)), 'Package').stage,
         { force: true, today: today(), me: mePersonId(db), addTask: (t) => createTask(db, t) });
     }],
     ['DELETE', '/api/packages/:id', ({ params }) => {

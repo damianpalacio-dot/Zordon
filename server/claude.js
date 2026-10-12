@@ -3,7 +3,7 @@
 //   Zordon/skills/<name>/       the team's skill library (SKILL.md each), editable from Zordon
 //   Zordon/jobs/<id>-<skill>.json   work for Claude to do
 //   Zordon/_Inbox/job-<id>.result.zordon.json   Claude's report back
-import { STAGES } from './packages.js';
+import { STAGES, STAGE_FOLDERS, CO_PARTS, WORKBOOK_FILE } from './packages.js';
 import { readdir, readFile, rm } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
@@ -16,7 +16,7 @@ export const SKILL_NAME_RE = /^[a-z0-9][a-z0-9-]{1,48}$/;
 function frontMatter(md) {
   const m = md.match(/^---\n([\s\S]*?)\n---/);
   const out = {};
-  if (m) for (const line of m[1].split('\n')) { const i = line.indexOf(':'); if (i > 0) out[line.slice(0, i).trim()] = line.slice(i + 1).trim(); }
+  if (m) for (const line of m[1].split('\n')) { const i = line.indexOf(':'); if (i > 0) out[line.slice(0, i).trim()] = line.slice(i + 1).trim().replace(/^"(.*)"$/, (_m, v) => v.replace(/\\"/g, '"')); }
   return out;
 }
 
@@ -76,20 +76,38 @@ ${rows}
 
 Unknown job? Save to \`Zordon/_Unfiled\` and say so.
 
-## Change order and submittal packages
+## Change orders (GEC2 Job Control layout)
 
-Every change order and every submittal gets its own folder with numbered stage subfolders. Put each file in the stage
-it belongs to; the stage tells everyone where the package stands.
+Every change order has its own folder, \`CO 0XX - <short description>\`, inside the stage folder for where it stands in
+\`01 COST CONTROL/04 CHANGE ORDERS\`:
 
-\`01 COST CONTROL/CHANGE ORDERS/COR 073 - Ice and Water Machine Power/\`
-${STAGES.cor.map(([name, what]) => `- \`${name}\`: ${what}`).join('\n')}
+${STAGE_FOLDERS.map((f) => `- \`${f}\``).join('\n')}
+
+Inside every CO folder (the final package PDF sits in the CO folder itself):
+
+${CO_PARTS.map(([f, label]) => `- \`${f}\`: \`CO 0XX - ${label} - <description>.pdf\``).join('\n')}
+
+Quotes go in a folder per company inside \`05 QUOTES/VENDORS\` (or SUBCONTRACTORS, CONSULTANTS, PROFESSIONAL SERVICES), named
+for the company on the letterhead, never the product brand. Vendor quotes never go in 01. The next CO number's empty folder
+(\`CO 074\`) always waits directly in \`04 CHANGE ORDERS\`, outside the stage folders; \`5. CO LOG\` holds the log PDFs.
+The CO number comes from the COR form and never changes (3 digits). The folder moves to the next stage folder only when it
+really happened (sent, approved, rejected). Each status change adds an OPEN line to
+\`${WORKBOOK_FILE()}\` until the job's Job Control Workbook (.xlsm) is updated by hand. Never edit the .xlsm.
+Full rules: the \`co-update\` and \`gec2-co-folder-scan-rules\` skills.
+
+## Submittal packages
 
 \`14 SUBMITTALS/26 24 16 Panelboards/\` (spec section, then the title)
 ${STAGES.submittal.map(([name, what]) => `- \`${name}\`: ${what}`).join('\n')}
 
-Reuse an existing folder for the same COR number or spec section, even under an older name (\`Change Request 073\`,
-\`262416 PANELBOARDS\`), and its existing \`Quotes\`, \`T&M\` or \`ENDSHEET\` folders. COR numbers are 3 digits (\`COR 073\`).
-Mention the COR number or spec section and the stage word (quote, T&M, workup, submitted, approved, billed, returned,
+## Pay apps and purchase orders
+
+- Pay apps: \`01 COST CONTROL/05 PAYMENT APPLICATIONS (MONTHLY BILLING)/PENCIL DRAFT (submitted)/<year>/<MM Month>\` for
+  pencil drafts and \`.../APPROVED/<year>/<MM Month>\` for final pay apps (period-end month).
+- Sub and consultant quotes, LOIs/NTPs and POs: \`01 COST CONTROL/06 PURCHASE ORDERS/<company>/QUOTES|LOI-NTP|PURCHASE ORDER\`
+  (see the \`gec2-sub-quote-po-filing\` skill).
+
+Mention the CO number or spec section and the stage word (quote, T&M, estimate, submitted, approved, billed, returned,
 released, O&M) in the file name so Zordon can track it.
 
 ## File names

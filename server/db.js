@@ -243,6 +243,11 @@ function migrate(db) {
   }
   // The hourly email check may see the same message twice; the message id keeps it to one import.
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_message_id ON emails(message_id) WHERE message_id IS NOT NULL');
+  // Change orders moved to the GEC2 Job Control stages (PENDING, SUBMITTED, APPROVED, BILLED, REJECTED-VOID).
+  const legacy = { '01 BACKUP': 'PENDING', '02 T&M': 'PENDING', '03 QUOTES': 'PENDING', '04 WORKUP': 'PENDING',
+    '05 SUBMITTED': 'SUBMITTED', '06 APPROVED': 'APPROVED', '07 BILLED': 'BILLED' };
+  const upd = db.prepare("UPDATE packages SET stage = ? WHERE type = 'cor' AND stage = ?");
+  for (const [from, to] of Object.entries(legacy)) upd.run(to, from);
 }
 
 // Local calendar date as YYYY-MM-DD (job sites run on local time, not UTC).

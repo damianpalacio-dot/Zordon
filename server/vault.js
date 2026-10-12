@@ -17,12 +17,13 @@ export const JOB_TEMPLATE = [
 // Document types, checked in order: [category, pattern, label used in the file name, template folder].
 const TYPES = [
   ['RFI', /\brfis?\b|request for information/i, 'RFI', '07 RFIS'],
-  ['COR', /change order|\bcor\b|\bpcos?\b|\bpci\b|\bco\s?#?\d|change request|\brfc\b|t&m|time and material|pricing/i, 'COR', '01 COST CONTROL'],
-  ['Pay App', /pay ?app|payment application|billing|invoice|\bsov\b|schedule of values|g70[23]|lien waiver|retention|retainage/i, 'PAY APP', '01 COST CONTROL'],
+  ['COR', /change order|\bcor\b|\bpcos?\b|\bpci\b|\bco\s?#?\d|change request|\brfc\b|t&m|time and material|pricing/i, 'COR', '01 COST CONTROL/04 CHANGE ORDERS'],
+  ['Pay App', /pay ?app|payment application|billing|invoice|\bsov\b|schedule of values|g70[23]|lien waiver|retention|retainage/i, 'PAY APP', '01 COST CONTROL/05 PAYMENT APPLICATIONS (MONTHLY BILLING)'],
+  ['Purchase Order', /purchase order|\bpo\s?#?\s?\d|\bloi\b|letter of intent|\bntp\b|notice to proceed/i, 'PO', '01 COST CONTROL/06 PURCHASE ORDERS'],
   ['Submittal', /submittal|shop drawing|product data|cut sheet|\bsub[- ]?\d/i, 'SUBMITTAL', '14 SUBMITTALS'],
   ['Design Change', /bulletin|\basi\b|\bccd\b|\bdcn\b|design change|ifc set change|revision \d|addend/i, 'DESIGN CHANGE', '04 DESIGN CHANGES'],
-  ['Procurement', /purchase order|\bpo\s?#|\bmrf\b|material request|\bquote\b|quotation|release letter|delivery ticket|packing slip|\bbom\b/i, 'PROCUREMENT', '09 PROCUREMENT LOG'],
-  ['Contract', /subcontract|contract|agreement|exhibit [a-z]\b|scope of work|\bsow\b|insurance cert|\bcoi\b|bond/i, 'CONTRACT', '01 COST CONTROL'],
+  ['Procurement', /\bmrf\b|material request|\bquote\b|quotation|release letter|delivery ticket|packing slip|\bbom\b/i, 'PROCUREMENT', '09 PROCUREMENT LOG'],
+  ['Contract', /subcontract|contract|agreement|exhibit [a-z]\b|scope of work|\bsow\b|insurance cert|\bcoi\b|bond/i, 'CONTRACT', '01 COST CONTROL/02 CONTRACT DOCUMENTS'],
   ['Proposal', /proposal|estimate|\bbid\b|takeoff|take-off/i, 'PROPOSAL', '01 COST CONTROL'],
   ['Schedule', /schedule|look-?ahead|gantt|\bcpm\b|milestone|\bp6\b/i, 'SCHEDULE', '06 SCHEDULE'],
   ['Specification', /specification|\bspecs?\b|section \d{2}\s?\d{2}/i, 'SPEC', '05 SPECIFICATIONS'],

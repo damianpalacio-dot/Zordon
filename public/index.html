@@ -5,12 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Zordon Command Center</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/vendor/fonts/chakra-petch/latin-600.css">
-  <link rel="stylesheet" href="/vendor/fonts/chakra-petch/latin-700.css">
-  <link rel="stylesheet" href="/vendor/fonts/barlow/latin-400.css">
-  <link rel="stylesheet" href="/vendor/fonts/barlow/latin-500.css">
-  <link rel="stylesheet" href="/vendor/fonts/barlow/latin-600.css">
-  <link rel="stylesheet" href="/vendor/fonts/barlow/latin-700.css">
+  <link rel="stylesheet" href="/vendor/fonts/inter/latin-400.css">
+  <link rel="stylesheet" href="/vendor/fonts/inter/latin-500.css">
+  <link rel="stylesheet" href="/vendor/fonts/inter/latin-600.css">
+  <link rel="stylesheet" href="/vendor/fonts/inter/latin-700.css">
   <link rel="stylesheet" href="/styles.css">
   <script type="importmap">
     {
@@ -41,8 +39,10 @@
       <a href="#/vault" data-view="vault"><i>🗄</i><span>File Vault</span></a>
       <a href="#/team" data-view="team"><i>☗</i><span>Rangers</span></a>
     </nav>
-    <div id="demo-banner" class="demo-banner" hidden></div>
-    <main id="view" tabindex="-1"></main>
+    <div class="content">
+      <div id="demo-banner" class="demo-banner" hidden></div>
+      <main id="view" tabindex="-1"></main>
+    </div>
   </div>
   <aside class="drawer" id="drawer" aria-hidden="true"></aside>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>

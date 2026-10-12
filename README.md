@@ -96,23 +96,30 @@ The same folder carries the hourly email batches, Claude job results and habit p
 
 ### Change order and submittal packages
 
-Every COR and every submittal gets its own folder, with a numbered stage folder for each step:
+Change orders follow the **GEC2 Job Control** layout (the same rules as the Job Control app and its Claude skills):
 
 ```
-01 COST CONTROL/CHANGE ORDERS/COR 073 - Ice and Water Machine Power/
-    01 BACKUP  02 T&M  03 QUOTES  04 WORKUP  05 SUBMITTED  06 APPROVED  07 BILLED
+01 COST CONTROL/04 CHANGE ORDERS/
+    CO 074/                                        the next number, ready and empty
+    1 PENDING (not yet submitted to GC)/CO 073 - Ice and Water Machine Power/
+        01 ESTIMATE - LABOR & MATERIAL  02 RFP-RFI REFERENCE  03 T&M TAGS  04 APPROVED CO DOCUMENTATION
+        05 QUOTES/VENDORS|SUBCONTRACTORS|CONSULTANTS|PROFESSIONAL SERVICES/<company>
+    2 SUBMITTED (awaiting GC-owner approval)/  3 APPROVED/  4 REJECTED-VOID/  5. CO LOG/
 14 SUBMITTALS/26 24 16 Panelboards/
     01 VENDOR DATA  02 GEC2 REVIEW  03 SUBMITTED  04 RETURNED  05 APPROVED  06 RELEASED  07 CLOSEOUT
 ```
 
-- Start one on **RFIs & Submittals → Start a package**, or drop a file in `_Inbox` with the COR number or spec section in
-  its name ("COR 73 Graybar quote", "26 24 16 panelboards approved"). Zordon creates the folder and files the
-  document in the right stage.
-- Existing folders are reused, even under older names (`Change Request 073`, `262416 PANELBOARDS`), and so are
-  their `Quotes`, `T&M` and `ENDSHEET` folders.
-- Each stage puts the next step on your list. A submitted COR gets a GC follow-up in 7 days, and an approved COR gets
-  "Bill on the next pay app" (Critical). A returned submittal gets revise-and-resubmit, and an approved one gets
-  "Release equipment". Packages only move forward when you file; set any stage by hand from the board.
+- Start one on **RFIs & Submittals → Start a package**, or drop a file in `_Inbox` with the CO number or spec section in
+  its name ("COR 73 Graybar quote", "26 24 16 panelboards approved"). Files inside a CO folder are named
+  `CO 073 - Vendor Quote - <description>.pdf`; quotes go in the company's folder when it already exists.
+- The empty `CO 0XX` folder is renamed and moved into `1 PENDING` when it gets its first document, and the next number's
+  empty folder is created. Older folders (`COR 073`, `Change Request 073`, `262416 PANELBOARDS`) are reused in place.
+- Changing a CO's stage moves its folder (PENDING → SUBMITTED → APPROVED, or REJECTED-VOID) and puts the next step on
+  your list: build the package, follow up with the GC in 7 days, bill on the next pay app (Critical). Submitted,
+  approved and rejected also add an OPEN line to `5. PROJECTS/Zordon/_PENDING WORKBOOK UPDATES.txt` and an
+  "Update the Job Control Workbook" task, since the `.xlsm` is only ever updated by hand.
+- Pay apps go to `05 PAYMENT APPLICATIONS (MONTHLY BILLING)/PENCIL DRAFT (submitted)` or `APPROVED`, then `<year>/<MM Month>`.
+  LOIs, NTPs and POs go to `06 PURCHASE ORDERS/<company>/LOI-NTP|QUOTES|PURCHASE ORDER` when the company folder exists.
 
 ## Claude Link (Cowork)
 
@@ -124,6 +131,8 @@ Zordon hands skilled work to your Claude in Cowork through OneDrive:
 
 Starter skills (edit them on the Claude Link page, or add your own): panel schedules & directories (uses your
 `GEC2_PANEL_SCHEDULE.xlsm`), contract review (electrical sub), drawing overlay (revision compare), spec review (Div 26/27/28).
+The GEC2 Job Control skills ship with it too: change orders (`co-update`, `gec2-co-folder-scan-rules`), new job folder
+setup, labor rate rules and the rate-sheet expiry date, sub quote / LOI / PO filing, and the Job Control app standards.
 
 **Learning your habits:** a weekly Claude check (Fridays) looks at how you actually named and filed things. Cowork
 watches too. When a new habit shows up 3+ times, they propose a rule or skill update; you approve or dismiss it on
