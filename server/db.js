@@ -247,6 +247,11 @@ function migrate(db) {
   // The hourly email check may see the same message twice; the message id keeps it to one import.
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_message_id ON emails(message_id) WHERE message_id IS NOT NULL');
   installBoardSync(db);
+  // Change order stages from older versions (folder-per-step stages, and REJECTED-VOID) map onto today's statuses.
+  const legacy = { '01 BACKUP': 'PENDING', '02 T&M': 'PENDING', '03 QUOTES': 'PENDING', '04 WORKUP': 'PENDING',
+    '05 SUBMITTED': 'SUBMITTED', '06 APPROVED': 'APPROVED', '07 BILLED': 'BILLED', 'REJECTED-VOID': 'REJECTED' };
+  const moveStage = db.prepare("UPDATE packages SET stage = ? WHERE type = 'cor' AND stage = ?");
+  for (const [from, to] of Object.entries(legacy)) moveStage.run(to, from);
   // Tasks from before categories existed get one from their words.
   const uncategorized = db.prepare('SELECT id, title, description FROM tasks WHERE category IS NULL').all();
   const setCategory = db.prepare('UPDATE tasks SET category = ? WHERE id = ?');

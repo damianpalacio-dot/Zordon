@@ -15,9 +15,10 @@ import { createVoiceSession, greeting, say, FAREWELL } from './voice.js';
 import { projectWeather } from './weather.js';
 import { scanOld, applyPlan, listArchiveLogs, undoArchive } from './cleanup.js';
 import { oneDriveStatus, listFolder, openOnComputer } from './onedrive.js';
-import { STAGES, packageType, stageFor, ensurePackage, coSubfolder, coLabel, specKey, recordPackage, setStage, listPackages } from './packages.js';
+import { STAGES, packageType, stageFor, ensurePackage, coSubfolder, coLabel, specKey, recordPackage, setStage, listPackages, WORKBOOK_FILE } from './packages.js';
 import { template, loadTemplate, copyTemplate, templateDir } from './template.js';
 import { compileCo } from './compile.js';
+import { askAdviser } from './adviser.js';
 import { TASK_CATEGORIES, CATEGORY_KEYS, categorize } from './categories.js';
 import { syncBoard, shareExistingTasks, syncStatus, BOARD_DIR } from './boardsync.js';
 import { findWorkbook, readWorkbook, readSheet } from './workbook.js';
@@ -172,7 +173,7 @@ export async function fileDocument(db, vaultRoot, { buffer, fromRel, filename, p
     if (pkg) {
       chosen.folder = pkg.folder;
       if (pkg.filename) chosen.filename = `${pkg.filename}${extname(chosen.filename)}`;
-    } else chosen.folder = await refineFolder(vaultRoot, chosen.folder, projectFolder(full), hay);
+    } else chosen.folder = await gec2Subfolder(await refineFolder(vaultRoot, chosen.folder, projectFolder(full), hay), chosen.category, hay, today);
   }
   const rel = await uniquePath(vaultRoot, chosen.folder, chosen.filename, fileExists);
   if (fromRel) await moveFile(vaultRoot, fromRel, rel);
@@ -242,12 +243,33 @@ async function packageFor(db, vaultRoot, project, chosen, hay, today) {
   // The CO form itself (the PDF made from the Job Control Workbook) sits at the top of the CO folder and
   // triggers the package for the GC; everything else goes in a backup subfolder.
   if (isCoForm) return { id: rec.id, folder: rec.folder, filename: cleanName(`${coLabel(number)} - ${rec.title}`, 150), compile: true };
-  const sub = await coSubfolder(vaultRoot, rec.folder, hay);
-  // Files in a CO folder carry the CO number; the proposal that goes to the GC also carries the job number.
+  const { sub, label } = await coSubfolder(vaultRoot, rec.folder, hay);
+  // Files in a CO folder carry the CO number and what they are ("CO 003 - Vendor Quote - Graybar Change 5",
+  // "CO 003 - T&M Tag - 2026-10-04"); the proposal that goes to the GC also carries the job number.
   const proposal = /proposal|cover letter|submitted|sent to (the )?gc/i.test(hay);
-  const tm = /t\s?&\s?m|\btags?\b|ticket/i.test(hay);
-  const filename = cleanName(`${coLabel(number)}${proposal && project.code ? ` - ${project.code}` : ''} - ${desc}${tm ? ` - ${today}` : ''}`, 150);
+  const co = coLabel(number);
+  const filename = cleanName(label === 'T&M Tag' ? `${co} - T&M Tag - ${today}`
+    : label ? `${co} - ${label} - ${desc}`
+      : `${co}${proposal && project.code ? ` - ${project.code}` : ''} - ${desc}`, 150);
   return { id: rec.id, folder: sub ? `${rec.folder}/${sub}` : rec.folder, filename };
+}
+
+// GEC2 subfolders for documents that aren't part of a CO or submittal folder:
+//   Pay apps:  05 PAYMENT APPLICATIONS (MONTHLY BILLING)/PENCIL DRAFT (submitted)|APPROVED/<year>/<MM Month>
+//   Sub quotes, LOIs/NTPs, POs: 06 PURCHASE ORDERS/<company>/QUOTES|LOI-NTP|PURCHASE ORDER (when the company folder exists)
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+function gec2Subfolder(folder, category, hay, today) {
+  if (category === 'Pay App' && /PAYMENT APPLICATIONS/i.test(folder.split('/').pop())) {
+    const kind = /pencil|draft/i.test(hay) ? 'PENCIL DRAFT (submitted)' : /approved|final|executed|signed/i.test(hay) ? 'APPROVED' : null;
+    if (!kind) return folder;
+    const [y, m] = today.split('-');
+    return `${folder}/${kind}/${y}/${m} ${MONTHS[Number(m) - 1]}`;
+  }
+  if (category === 'Purchase Order' && /PURCHASE ORDERS?\/[^/]+$/i.test(folder)) {
+    const kind = /\bloi\b|letter of intent|\bntp\b|notice to proceed/i.test(hay) ? 'LOI-NTP' : /quote|quotation|proposal/i.test(hay) ? 'QUOTES' : 'PURCHASE ORDER';
+    return `${folder}/${kind}`;
+  }
+  return folder;
 }
 
 // ---------- The job template ----------
@@ -742,6 +764,35 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
       if (!loadRoster(db, body)) throw new HttpError(409, 'Zordon already has your real data. Use scripts/reset-zordon.bat to start over.');
       writeRoster(db, vaultRoot).catch(() => {});
       return { people: db.prepare('SELECT COUNT(*) AS n FROM people').get().n, projects: db.prepare('SELECT COUNT(*) AS n FROM projects').get().n };
+    }],
+
+    // ----- Financial adviser -----
+    // Money at a glance: change orders by stage, billing / CO tasks, CO status changes not yet in the workbooks.
+    ['GET', '/api/finance', async () => {
+      const cos = listPackages(db, { type: 'cor' });
+      const stages = STAGES.cor.map((st) => {
+        const list = cos.filter((c) => c.stage === st.name);
+        return { stage: st.name, what: st.what, count: list.length, amount: list.reduce((n, c) => n + (Number(c.amount) || 0), 0) };
+      });
+      const money = listTasks(db, {}, today()).filter((t) => ['billing', 'change_order'].includes(t.category) && t.status !== 'done');
+      const log = vaultRoot ? await readFile(vaultPath(vaultRoot, WORKBOOK_FILE()), 'utf8').catch(() => '') : '';
+      const workbook_open = log.split('\n').filter((l) => l.startsWith('OPEN |'));
+      return {
+        ai: aiEnabled(), stages, change_orders: cos.slice(0, 50),
+        money_tasks: money.slice(0, 50), late: money.filter((t) => t.health === 'delayed').length,
+        due_soon: money.filter((t) => t.health === 'due_soon').length, workbook_open,
+      };
+    }],
+    ['POST', '/api/adviser', async ({ body }) => {
+      if (!aiEnabled()) {
+        return { ai: false, reply: 'The adviser needs Claude. Add ANTHROPIC_API_KEY=<your key> to the .env file next to Zordon (copy .env.example), then restart Zordon. Until then the money summary on this page still works.' };
+      }
+      try {
+        return { ai: true, ...(await askAdviser(body.messages, { db, vaultRoot, today: today(), me: mePersonId(db), createTask: (t) => createTask(db, t) })) };
+      } catch (err) {
+        if (err.status === 400 && /question/.test(err.message)) throw new HttpError(400, err.message);
+        throw new HttpError(502, `Claude could not answer: ${err.message}`);
+      }
     }],
 
     // ----- Change order & submittal packages -----

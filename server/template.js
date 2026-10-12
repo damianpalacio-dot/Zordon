@@ -1,4 +1,4 @@
-// The GEC2 job template lives in OneDrive at "5. PROJECTS/0. JOB TEMPLATE - DO NOT DELETE". It is the source of truth
+// The GEC2 job template lives in OneDrive at "5. PROJECTS/_00 JOB TEMPLATE - DO NOT DELETE" (older: "0. JOB TEMPLATE …"). It is the source of truth
 // for job folders: Zordon reads its tree and README, checks it for changes every few minutes, files documents by it,
 // copies it for new jobs, and puts it in FILING.md so Claude (Cowork) follows the same structure.
 import { copyFile, mkdir, readdir, readFile, stat } from 'node:fs/promises';
@@ -6,7 +6,9 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { CATEGORY_FOLDERS, JOB_TEMPLATE, projectsDir, vaultPath } from './vault.js';
 
-export const TEMPLATE_NAME = '0. JOB TEMPLATE - DO NOT DELETE';
+// The template was renamed "_00 JOB TEMPLATE - DO NOT DELETE" in Oct 2026; older OneDrives still have "0. JOB TEMPLATE …".
+export const TEMPLATE_NAMES = ['_00 JOB TEMPLATE - DO NOT DELETE', '0. JOB TEMPLATE - DO NOT DELETE'];
+export let TEMPLATE_NAME = TEMPLATE_NAMES[0];
 export const templateDir = () => [projectsDir(), TEMPLATE_NAME].filter(Boolean).join('/');
 const README_RE = /^readme/i;
 const SKIP_RE = /^(\.|~\$|desktop\.ini$|thumbs\.db$)/i;
@@ -61,12 +63,18 @@ export const DEFAULT_CO = {
   base: '01 COST CONTROL/04 CHANGE ORDERS',
   stages: ['1 PENDING (not yet submitted to GC)', '2 SUBMITTED (awaiting GC-owner approval)', '3 APPROVED', '4 REJECTED-VOID'].map((name) => ({ name, key: STAGE_KEY(name) })),
   folderTemplate: null,
-  subfolders: ['01 PRICING - BACKUP', '02 RFP-RFI REFERENCE', '03 T&M TAGS', '04 APPROVED CO DOCUMENTATION'],
+  // Damian's CO folder standard (Oct 2026). Quotes go one folder per company inside the four 05 QUOTES folders.
+  subfolders: ['01 ESTIMATE - LABOR & MATERIAL', '02 RFP-RFI REFERENCE', '03 T&M TAGS', '04 APPROVED CO DOCUMENTATION',
+    '05 QUOTES/VENDORS', '05 QUOTES/SUBCONTRACTORS', '05 QUOTES/CONSULTANTS', '05 QUOTES/PROFESSIONAL SERVICES'],
 };
 
 // Read the template and update Zordon's folder map. Returns { changed, added, removed }.
 export async function loadTemplate(root) {
   template.checked_at = new Date().toISOString();
+  for (const name of TEMPLATE_NAMES) {
+    const dir = [projectsDir(), name].filter(Boolean).join('/');
+    if ((await stat(vaultPath(root, dir)).catch(() => null))?.isDirectory()) { TEMPLATE_NAME = name; break; }
+  }
   const info = await stat(vaultPath(root, templateDir())).catch(() => null);
   if (!info?.isDirectory()) { template.found = false; return { changed: false, added: [], removed: [] }; }
   const tree = await walk(root);
@@ -98,7 +106,10 @@ function applyTemplate() {
   const stages = template.dirs.filter((d) => d.startsWith(`${base}/`) && d.split('/').length === base.split('/').length + 1)
     .map((d) => d.split('/').pop()).filter((n) => STAGE_KEY(n)).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   const folderTemplate = template.dirs.find((d) => d.startsWith(`${base}/`) && /DUPLICATE ME|_CO FOLDER TEMPLATE/i.test(d.split('/').pop())) || null;
-  const subfolders = folderTemplate ? template.dirs.filter((d) => d.startsWith(`${folderTemplate}/`) && d.split('/').length === folderTemplate.split('/').length + 1).map((d) => d.split('/').pop()) : [];
+  // Subfolders one or two levels down ("03 T&M TAGS", "05 QUOTES/VENDORS"); a parent that has children is implied by them.
+  const depth = folderTemplate ? folderTemplate.split('/').length : 0;
+  const inside = folderTemplate ? template.dirs.filter((d) => d.startsWith(`${folderTemplate}/`) && d.split('/').length <= depth + 2).map((d) => d.slice(folderTemplate.length + 1)) : [];
+  const subfolders = inside.filter((d) => !inside.some((o) => o.startsWith(`${d}/`)));
   template.co = {
     base,
     stages: stages.length ? stages.map((name) => ({ name, key: STAGE_KEY(name) })) : DEFAULT_CO.stages,

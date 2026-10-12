@@ -1,19 +1,23 @@
 // Change order submittal package: the CO form (PDF from the Job Control Workbook) plus everything in the CO folder's
-// backup folders, merged into one PDF to send to the GC, with a contents page in front.
+// backup folders, merged into one PDF to send to the GC. No cover or contents page: it opens straight on the CO form
+// (GEC2 Job Control standard), then reference, material sheets, vendor quotes, sub/consultant quotes, other backup.
 //   CO 001 - Additional Lighting Circuits/
 //     CO 001 - Additional Lighting Circuits.pdf            <- the CO form
-//     01 PRICING - BACKUP/ 02 RFP-RFI REFERENCE/ 03 T&M TAGS/ (and any ESTIMATE folder)
+//     01 ESTIMATE - LABOR & MATERIAL/ 02 RFP-RFI REFERENCE/ 03 T&M TAGS/ 05 QUOTES/VENDORS|SUBCONTRACTORS|…
+//     (older CO folders: 01 PRICING - BACKUP/)
 //     CO 001 - G3249 - Additional Lighting Circuits.pdf    <- the compiled package (written here)
 import { readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { extname } from 'node:path';
-import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import { PDFDocument } from 'pdf-lib';
 import { vaultPath } from './vault.js';
 
 // Which subfolders go in, in this order. Approved CO documentation is what comes back from the GC, so it stays out.
 const SECTIONS = [
-  ['Pricing & backup', /PRICING|BACKUP|QUOTE/i],
-  ['Estimate', /ESTIMAT|WORK-?UP|TAKE-?OFF|ENDSHEET/i],
   ['RFP / RFI reference', /RFP|RFI|REFERENCE/i],
+  ['Material sheets', /ESTIMAT|WORK-?UP|TAKE-?OFF|ENDSHEET/i],
+  ['Vendor quotes', /VENDOR/i],
+  ['Subcontractor & consultant quotes', /SUBCONTRACT|CONSULTANT|PROFESSIONAL/i],
+  ['Pricing & backup', /PRICING|BACKUP|QUOTE/i],
   ['T&M tags', /T\s?&\s?M|TAGS?\b/i],
 ];
 const IMAGES = new Set(['.jpg', '.jpeg', '.png']);
@@ -39,11 +43,22 @@ export async function compileCo(root, folder, { label, jobCode, jobName, desc, t
   // The CO form: PDFs sitting directly in the CO folder (not the compiled package itself).
   const form = top.filter((e) => e.isFile() && extname(e.name).toLowerCase() === '.pdf' && !isOutput(e.name)).map((e) => `${folder}/${e.name}`).sort(sortNames);
   const parts = [['Change order', form]];
-  const subs = top.filter((e) => e.isDirectory()).map((e) => e.name);
+  // Subfolders, with 05 QUOTES opened up into VENDORS, SUBCONTRACTORS, … so each lands in its own section.
+  const subs = [];
+  for (const d of top.filter((e) => e.isDirectory()).map((e) => e.name)) {
+    if (/QUOTE/i.test(d)) {
+      for (const inner of (await readdir(vaultPath(root, folder, d), { withFileTypes: true }).catch(() => [])).filter((e) => e.isDirectory())) subs.push(`${d}/${inner.name}`);
+    }
+    subs.push(d);
+  }
   const used = new Set();
+  const usedFiles = new Set();
   for (const [section, re] of SECTIONS) {
     const files = [];
-    for (const d of subs.filter((n) => re.test(n) && !/APPROVED/i.test(n) && !used.has(n))) { used.add(d); files.push(...await filesIn(root, `${folder}/${d}`)); }
+    for (const d of subs.filter((n) => re.test(n.split('/').pop()) && !/APPROVED/i.test(n) && !used.has(n))) {
+      used.add(d);
+      for (const f of await filesIn(root, `${folder}/${d}`)) if (!usedFiles.has(f)) { usedFiles.add(f); files.push(f); }
+    }
     parts.push([section, files]);
   }
 
@@ -76,31 +91,6 @@ export async function compileCo(root, folder, { label, jobCode, jobName, desc, t
   }
   if (!included.length) throw Object.assign(new Error('Nothing to compile yet: no PDFs in the CO folder'), { status: 400 });
 
-  // Contents page in front.
-  const font = await out.embedFont(StandardFonts.Helvetica);
-  const bold = await out.embedFont(StandardFonts.HelveticaBold);
-  const cover = out.insertPage(0, [612, 792]);
-  let y = 740;
-  const line = (text, { size = 11, f = font, color = rgb(0.1, 0.1, 0.12), indent = 0 } = {}) => {
-    if (y < 60) return;
-    cover.drawText(String(text).replace(/[^\x20-\x7E]/g, '-').slice(0, 95), { x: 54 + indent, y, size, font: f, color });
-    y -= size + 7;
-  };
-  line(`${label} - ${desc}`, { size: 18, f: bold });
-  line([jobCode, jobName].filter(Boolean).join(' - '), { size: 12 });
-  line(`Change order package - ${today}`, { size: 10, color: rgb(0.4, 0.4, 0.45) });
-  y -= 10;
-  line('CONTENTS', { size: 11, f: bold });
-  let page = 2;
-  for (const [section] of parts) {
-    const items = included.filter((i) => i.section === section);
-    if (!items.length) continue;
-    line(section, { size: 11, f: bold, indent: 6 });
-    for (const i of items) {
-      line(`${i.file.split('/').pop()}  .....  page ${page}`, { size: 10, indent: 18 });
-      page += i.pages;
-    }
-  }
   const path = `${folder}/${outName}`;
   await writeFile(vaultPath(root, path), await out.save());
   return { path, included, skipped, pages: out.getPageCount() };

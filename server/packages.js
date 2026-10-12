@@ -1,11 +1,14 @@
 // Change order and submittal packages, laid out the way the GEC2 job template says
 // (OneDrive "5. PROJECTS/0. JOB TEMPLATE - DO NOT DELETE"; see template.js):
-//   01 COST CONTROL/04 CHANGE ORDERS/<status stage>/CO 03 - Additional Lighting Circuits/<01 PRICING - BACKUP …>
-//     the CO folder lives in its status stage (1 PENDING … 4 REJECTED-VOID) and moves when the status changes.
+//   01 COST CONTROL/04 CHANGE ORDERS/<status stage>/CO 003 - Additional Lighting Circuits/
+//     01 ESTIMATE - LABOR & MATERIAL  02 RFP-RFI REFERENCE  03 T&M TAGS  04 APPROVED CO DOCUMENTATION
+//     05 QUOTES/VENDORS|SUBCONTRACTORS|CONSULTANTS|PROFESSIONAL SERVICES/<company>
+//   the CO folder lives in its status stage (1 PENDING … 4 REJECTED-VOID) and moves when the status changes; the next
+//   number's empty folder ("CO 004") waits in 04 CHANGE ORDERS itself, outside the stage folders.
 //   14 SUBMITTALS/26 2416 - PANELBOARDS   one folder per CSI spec section; submittal status is tracked in Zordon.
-import { mkdir, readdir, rename, stat } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { addDays, isoDate } from './db.js';
-import { CATEGORY_FOLDERS, cleanName, titleCase, vaultPath } from './vault.js';
+import { CATEGORY_FOLDERS, cleanName, projectsDir, titleCase, vaultPath } from './vault.js';
 import { coLayout, copyTemplate } from './template.js';
 
 const CO_KEYS = ['PENDING', 'SUBMITTED', 'APPROVED', 'BILLED', 'REJECTED'];
@@ -53,7 +56,7 @@ export function stageFor(type, hay) {
 // What Zordon puts on your list when a package reaches a stage: [[title, days until due, priority], …].
 const NEXT_STEP = {
   cor: {
-    SUBMITTED: [['Follow up with the GC for approval of', 7, 'high']],
+    SUBMITTED: [['Follow up with the GC for approval of', 7, 'high'], ['Update Job Control Workbook for submitted', 0, 'medium']],
     APPROVED: [['Update Job Control Workbook for approved', 0, 'high'], ['Bill on the next pay app:', 3, 'critical']],
     REJECTED: [['Update Job Control Workbook for rejected/void', 0, 'high']],
   },
@@ -116,26 +119,90 @@ export async function ensurePackage(root, jobBase, type, info) {
   // Look in every stage folder, then in older layouts (01 COST CONTROL/CHANGE ORDERS, or loose in cost control).
   const places = [...layout.stages.map((s) => ({ dir: `${base}/${s.name}`, stage: s.key })), { dir: base, stage: null },
     { dir: `${jobBase}/01 COST CONTROL/CHANGE ORDERS`, stage: null }, { dir: `${jobBase}/01 COST CONTROL`, stage: null }];
+  const pending = layout.stages[0];
   for (const p of places) {
     const hit = (await dirs(root, p.dir)).find((d) => packageMatches(type, d, info));
-    if (hit) return { folder: `${p.dir}/${hit}`, stage: p.stage };
+    if (!hit) continue;
+    // The empty "CO 003" waiting in 04 CHANGE ORDERS: renamed and moved into the pending stage once it gets a document.
+    if (p.dir === base && isReady(hit)) {
+      const folder = `${base}/${pending.name}/${packageName(type, info)}`;
+      if (await exists(root, folder)) return { folder, stage: pending.key };
+      await mkdir(vaultPath(root, base, pending.name), { recursive: true });
+      await rename(vaultPath(root, base, hit), vaultPath(root, folder));
+      await ensureReadyFolder(root, jobBase);
+      return { folder, stage: pending.key };
+    }
+    return { folder: `${p.dir}/${hit}`, stage: p.stage };
   }
   // New CO: a copy of the template's CO folder, in the first (pending) stage.
-  const pending = layout.stages[0];
   const folder = `${base}/${pending.name}/${packageName(type, info)}`;
-  if (layout.folderTemplate) await copyTemplate(root, folder, { from: layout.folderTemplate });
-  for (const sub of layout.subfolders) await mkdir(vaultPath(root, folder, sub), { recursive: true });
+  await newCoFolder(root, folder);
+  await ensureReadyFolder(root, jobBase);
   return { folder, stage: pending.key };
 }
 
-// Which of the CO folder's subfolders a document belongs in.
+const isReady = (name) => /^CO\s*\d+$/i.test(cleanName(name, 40));
+async function newCoFolder(root, folder) {
+  const layout = coLayout();
+  if (layout.folderTemplate) await copyTemplate(root, folder, { from: layout.folderTemplate });
+  for (const sub of layout.subfolders) await mkdir(vaultPath(root, folder, sub), { recursive: true });
+}
+
+// Keep the next CO number's empty folder ready directly in 04 CHANGE ORDERS (not in a stage folder), like the
+// co-update skill does. Only for jobs that use the stage-folder layout. Returns its path, or null.
+export async function ensureReadyFolder(root, jobBase) {
+  const layout = coLayout();
+  const base = `${jobBase}/${layout.base}`;
+  const stageDirs = await Promise.all(layout.stages.map((s) => dirs(root, `${base}/${s.name}`)));
+  // One ready folder at a time; and only for jobs already on the stage-folder layout.
+  if ((await dirs(root, base)).some(isReady) || !stageDirs.some((d) => d.some((n) => !n.startsWith('_')))) return null;
+  const all = [...await dirs(root, base), ...stageDirs.flat(), ...await dirs(root, `${jobBase}/01 COST CONTROL/CHANGE ORDERS`)];
+  const numbers = all.map((d) => cleanName(d, 120).toUpperCase().match(/^(?:COR|PCO|PCI|CR|CO|CHANGE (?:ORDER|REQUEST))\s*[#-]?\s*0*(\d+)\b/)?.[1])
+    .filter(Boolean).map(Number);
+  const next = (numbers.length ? Math.max(...numbers) : 0) + 1;
+  if (all.some((d) => packageMatches('cor', d, { number: next }))) return null;
+  const folder = `${base}/${coLabel(next)}`;
+  await newCoFolder(root, folder);
+  return folder;
+}
+
+// Inside a CO folder: [what it is, file label, words, folder name patterns (first that exists wins)].
+// Vendor quotes never go in the estimate folder; the McCormick estimate does.
+export const CO_PARTS = [
+  ['T&M tag', 'T&M Tag', /t\s?&\s?m|time and material|\btags?\b|ticket|voucher|daily/i, [/T\s?&\s?M|TAG/i]],
+  ['Professional services quote', 'Professional Services Quote', /professional services|engineering (fee|proposal|quote)|survey/i, [/QUOTE/i, /PROFESSIONAL/i]],
+  ['Consultant quote', 'Consultant Quote', /consultant/i, [/QUOTE/i, /CONSULTANT/i]],
+  ['Sub quote', 'Sub Quote', /\bsub(contractor)?['’]?s?\s+(quote|proposal|pricing)|subcontractor/i, [/QUOTE/i, /SUBCONTRACT/i]],
+  ['Vendor quote', 'Vendor Quote', /quotes?\b|quotation|rental|vendor pric|supplier/i, [/QUOTE/i, /VENDOR/i]],
+  ['Estimate', 'Estimate - Labor & Material', /mccormick|estimate|takeoff|take-off|work-?up|end ?sheet|recap|labor calc/i, [/ESTIMAT/i]],
+  ['Signed CO', 'Signed CO', /approved|executed|fully signed|signed co\b|\bcco\b/i, [/APPROVED|SIGNED/i]],
+  ['Reference', 'Reference', /\brf[ip]\b|\bccd\b|\bpci\b|\basi\b|\bdc[dn]\b|bulletin|directive|drawing|sketch|reference/i, [/RFI|RFP|REFERENCE/i]],
+];
+export const coPart = (hay) => CO_PARTS.find(([, , re]) => re.test(hay)) || null;
+
+// Which of the CO folder's subfolders a document belongs in, e.g. "05 QUOTES/VENDORS/GRAYBAR ELECTRIC" (the company
+// folder only when it already exists). Older CO folders without a match fall back to their PRICING / BACKUP folder.
+// Returns { sub, label } (sub null = the CO folder itself).
 export async function coSubfolder(root, folder, hay) {
+  const part = coPart(hay);
   const subs = await dirs(root, folder);
-  const pick = (re) => subs.find((s) => re.test(s));
-  if (/t\s?&\s?m|time and material|\btags?\b|ticket/i.test(hay)) return pick(/T\s?&\s?M|TAG/i) || null;
-  if (/approved|executed|fully signed|signed co\b|\bcco\b/i.test(hay)) return pick(/APPROVED|SIGNED/i) || null;
-  if (/\brfi\b|\brfp\b|bulletin|\basi\b|\bccd\b|directive|reference/i.test(hay)) return pick(/RFI|RFP|REFERENCE/i) || null;
-  return pick(/PRICING|BACKUP|QUOTE/i) || null;
+  const fallback = () => ({ sub: subs.find((d) => /PRICING|BACKUP/i.test(d)) || null, label: part?.[1] || null });
+  if (!part) return fallback();
+  const [top, inner] = part[3];
+  const first = subs.find((d) => top.test(d));
+  if (!first) return part[0].endsWith('quote') || part[0] === 'Estimate' ? fallback() : { sub: null, label: part[1] };
+  let sub = first;
+  if (inner) {
+    const second = (await dirs(root, `${folder}/${first}`)).find((d) => inner.test(d));
+    if (second) {
+      sub += `/${second}`;
+      const words = new Set(cleanName(hay, 300).toUpperCase().split(/[^A-Z0-9&]+/).filter((w) => w.length >= 3));
+      const company = (await dirs(root, `${folder}/${sub}`))
+        .find((d) => cleanName(d, 80).toUpperCase().split(/[^A-Z0-9&]+/).filter((w) => w.length >= 3).some((w) => words.has(w)));
+      if (company) sub += `/${company}`;
+    }
+  }
+  return { sub, label: part[1] };
 }
 
 // Move a CO folder into the stage folder for `key`. Only folders already in the template layout move.
@@ -186,7 +253,8 @@ export function recordPackage(db, { project_id, type, number, spec_section, titl
       folder, first, amount ?? null, JSON.stringify([{ stage: first, date: today }]), today, today).lastInsertRowid);
     return row(db, id);
   }
-  db.prepare('UPDATE packages SET folder = COALESCE(?, folder), title = COALESCE(?, title), amount = COALESCE(?, amount), updated_at = ? WHERE id = ?')
+  // The first document names the package; later quotes and letters don't rename it.
+  db.prepare("UPDATE packages SET folder = COALESCE(?, folder), title = CASE WHEN title = '' THEN COALESCE(?, title) ELSE title END, amount = COALESCE(?, amount), updated_at = ? WHERE id = ?")
     .run(folder || null, cleanTitle(title) || null, amount ?? null, today, prev.id);
   return row(db, prev.id);
 }
@@ -202,6 +270,15 @@ export async function setStage(db, id, stage, { force = false, today = isoDate()
   const folder = pkg.type === 'cor' && root ? await moveCoFolder(root, pkg, stage).catch(() => pkg.folder) : pkg.folder;
   const history = [...JSON.parse(pkg.history || '[]'), { stage, date: today }];
   db.prepare('UPDATE packages SET stage = ?, folder = ?, history = ?, updated_at = ? WHERE id = ?').run(stage, folder, JSON.stringify(history), today, id);
+  // Documents filed in a CO folder that moved keep pointing at the right place.
+  if (folder !== pkg.folder) {
+    db.prepare('UPDATE documents SET path = ? || substr(path, ?) WHERE substr(path, 1, ?) = ?').run(folder, pkg.folder.length + 1, pkg.folder.length + 1, `${pkg.folder}/`);
+  }
+  // Status changes the GC decided go on the reminder list until the Job Control Workbook (.xlsm) is updated by hand.
+  if (pkg.type === 'cor' && root && ['SUBMITTED', 'APPROVED', 'REJECTED'].includes(stage)) {
+    const job = db.prepare('SELECT code, name FROM projects WHERE id = ?').get(pkg.project_id);
+    await noteWorkbookUpdate(root, { job: job?.code || job?.name || '', number: pkg.number, stage, title: pkg.title }, today).catch(() => null);
+  }
   // Reaching a new stage finishes the previous next steps.
   db.prepare("UPDATE tasks SET status = 'done', completed_at = ? WHERE source = 'package' AND source_ref = ? AND status != 'done'").run(today, id);
   const label = pkg.type === 'cor' ? coLabel(pkg.number) : `Submittal ${pkg.spec_section || ''}`.trim();
@@ -211,4 +288,26 @@ export async function setStage(db, id, stage, { force = false, today = isoDate()
     status: 'not_started', source: 'package', source_ref: id,
   })) : [];
   return { package: row(db, id), task_ids, task_id: task_ids[0] ?? null };
+}
+
+// The reminder file that keeps nagging until the real Job Control Workbook (.xlsm) is updated by hand
+// (co-update skill). Lines: OPEN | date | job | CO ### | status | description.
+export const WORKBOOK_FILE = () => `${projectsDir() ? `${projectsDir()}/` : ''}Zordon/_PENDING WORKBOOK UPDATES.txt`;
+const WORKBOOK_HEADER = `GEC2 PENDING WORKBOOK UPDATES
+Each line is a change order status change that still needs to be entered in the job's GEC2 Job Control Workbook (.xlsm).
+Format: OPEN | date | job | CO ### | new status | description
+When the workbook is updated, change OPEN to DONE, add "resolved YYYY-MM-DD" and move the line under ---- DONE ----.
+
+---- OPEN ----
+`;
+export async function noteWorkbookUpdate(root, { job, number, stage, title }, today = isoDate()) {
+  const rel = WORKBOOK_FILE();
+  const line = `OPEN | ${today} | ${job} | ${coLabel(number)} | ${stage} | ${title}\n`;
+  const current = await readFile(vaultPath(root, rel), 'utf8').catch(() => null);
+  if (current?.includes(`| ${job} | ${coLabel(number)} | ${stage} |`)) return rel;
+  await mkdir(vaultPath(root, rel, '..'), { recursive: true });
+  const next = current === null ? `${WORKBOOK_HEADER}${line}---- DONE ----\n`
+    : current.includes('---- DONE ----') ? current.replace('---- DONE ----', `${line}---- DONE ----`) : `${current}${line}`;
+  await writeFile(vaultPath(root, rel), next);
+  return rel;
 }

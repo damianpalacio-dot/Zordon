@@ -1,6 +1,6 @@
 ---
 name: zordon-link
-description: Damian's link to Zordon, his project command center. Use whenever he asks to run his Zordon jobs, to send a change order (CO) PDF from his Job Control Workbook to Zordon, to save or file anything for a GEC2 job (RFIs, submittals, change orders, pay apps, drawings, specs, proposals, photos), to use one of his team skills (panel schedules, contract review, drawing overlays, spec review, or any skill in Zordon/skills), or when he shows you a new way he wants something done.
+description: Damian's link to Zordon, his project command center. Use whenever he asks to run his Zordon jobs, to send a change order (CO) PDF from his Job Control Workbook to Zordon, to save or file anything for a GEC2 job (RFIs, submittals, change orders, pay apps, drawings, specs, proposals, photos), to use one of his team skills (panel schedules, contract review, drawing overlays, spec review, the GEC2 Job Control change order, job setup, labor rate and PO filing skills, or any skill in Zordon/skills), or when he shows you a new way he wants something done.
 metadata:
   title: Zordon Link (Cowork bridge)
 ---
@@ -13,7 +13,7 @@ Zordon is Damian's command center. It shares a control folder with you in his GE
 |---|---|
 | `Zordon/FILING.md` | **The filing rules.** Read them before saving any file. |
 | `Zordon/zordon-roster.json` | Team, jobs, job numbers and short names (e.g. G2707 = BURB RPT) |
-| `Zordon/skills/<name>/SKILL.md` | The team skill library (panel-schedule, contract-review, drawing-overlay, spec-review, and whatever Damian adds) |
+| `Zordon/skills/<name>/SKILL.md` | The team skill library (panel-schedule, contract-review, drawing-overlay, spec-review, the GEC2 Job Control skills such as co-update and gec2-job-folder-setup, and whatever Damian adds) |
 | `Zordon/jobs/*.json` | Work Zordon has queued for you |
 | `Zordon/_Inbox/` | Where you report back (and where any file can be dropped to be auto-filed) |
 | `5. PROJECTS/<Job #> - <Description>/` | The real job folders, laid out like `5. PROJECTS/0. JOB TEMPLATE - DO NOT DELETE` (never delete or rename that template). Some jobs sit one level down in a group folder, e.g. `5. PROJECTS/TOUCH N GO/G2934`. |

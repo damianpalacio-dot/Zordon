@@ -4,6 +4,7 @@
 //   Zordon/jobs/<id>-<skill>.json   work for Claude to do
 //   Zordon/_Inbox/job-<id>.result.zordon.json   Claude's report back
 import { template, templateDir, templateOutline, coLayout } from './template.js';
+import { WORKBOOK_FILE } from './packages.js';
 import { readdir, readFile, rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -17,7 +18,7 @@ export const SKILL_NAME_RE = /^[a-z0-9][a-z0-9-]{1,48}$/;
 function frontMatter(md) {
   const m = md.match(/^---\n([\s\S]*?)\n---/);
   const out = {};
-  if (m) for (const line of m[1].split('\n')) { const i = line.indexOf(':'); if (i > 0) out[line.slice(0, i).trim()] = line.slice(i + 1).trim(); }
+  if (m) for (const line of m[1].split('\n')) { const i = line.indexOf(':'); if (i > 0) out[line.slice(0, i).trim()] = line.slice(i + 1).trim().replace(/^"(.*)"$/, (_m, v) => v.replace(/\\"/g, '"')); }
   return out;
 }
 
@@ -104,10 +105,24 @@ Unknown job? Save to \`Zordon/_Unfiled\` and say so.
 - **The CO form from the Job Control Workbook:** when Damian makes the CO PDF, copy it unchanged into \`Zordon/_Inbox\`.
   Zordon creates (or finds) \`CO 001 - <description>\` (the description is whatever follows "CO 001" in the file name,
   so the job number and job name drop off), puts the form at the top of the CO folder, and builds the package for the
-  GC: \`CO 001 - G3249 - <description>.pdf\` = contents page + CO form + pricing/backup + estimate + RFP/RFI reference
-  + T&M tags. Backup filed later rebuilds it. Save backup as PDF (or JPG/PNG) so it can be included.
-- When a CO is approved or rejected, Zordon adds a task to update the job's GEC2_Job_Control_Workbook.xlsm (the source
-  of truth for COs, submittals and billing) and, once approved, to bill it.
+  GC: \`CO 001 - G3249 - <description>.pdf\` = CO form + RFP/RFI reference + material sheets (estimate) + vendor quotes
+  + sub/consultant quotes + other backup (T&M tags), with no cover or contents page. Backup filed later rebuilds it. Save backup as PDF (or JPG/PNG) so it can be included.
+- Quotes go one folder per company inside \`05 QUOTES/VENDORS\` (or SUBCONTRACTORS, CONSULTANTS, PROFESSIONAL SERVICES),
+  named for the company on the letterhead, never the product brand. Vendor quotes never go in the estimate folder.
+  Names: \`CO 003 - Vendor Quote - <company> <quote #>.pdf\`, \`CO 003 - Estimate - Labor & Material (McCormick …).pdf\`.
+- The next CO number's empty folder (\`CO 004\`) always waits directly in \`${co.base}\`, outside the status folders.
+  When a CO folder is filled, rename the ready folder and move it into the first status folder, then make the next one.
+- When a CO is submitted, approved or rejected, Zordon adds an OPEN line to \`${WORKBOOK_FILE()}\` and a task to update
+  the job's GEC2_Job_Control_Workbook.xlsm (the source of truth for COs, submittals and billing; never edit it) and,
+  once approved, to bill it.
+- Full rules: the \`co-update\` and \`gec2-co-folder-scan-rules\` skills.
+
+## Pay apps and purchase orders
+
+- Pay apps: \`${CATEGORY_FOLDERS['Pay App']}/PENCIL DRAFT (submitted)/<year>/<MM Month>\` for pencil drafts and
+  \`…/APPROVED/<year>/<MM Month>\` for final pay apps (period-end month).
+- Sub and consultant quotes, LOIs/NTPs and POs: \`${CATEGORY_FOLDERS['Purchase Order']}/<company>/QUOTES|LOI-NTP|PURCHASE ORDER\`
+  (the \`gec2-sub-quote-po-filing\` skill).
 
 ## Submittals
 

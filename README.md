@@ -21,6 +21,36 @@ A project coordination hub for a construction PM, the APM, the project engineer 
 
 Change orders and billing are treated as cash flow: they're never below *High* priority, become *Critical* inside 3 days, and lead Zordon's briefing.
 
+
+## Financial adviser (start here)
+
+Zordon now opens on the **Adviser**: a money-first view of your jobs with Claude to think it through.
+
+- **Adviser:** change orders by stage with dollar totals, late and due-soon billing / CO tasks, and the CO status
+  changes still to enter in the Job Control Workbooks. Ask anything ("What approved work haven't I billed?", "Is CO 012
+  worth chasing?"). The adviser runs on Claude (Opus 5.5, adaptive thinking). Before it answers, it looks up your
+  tracked change orders, billing tasks, each job's Job Control Workbook (read-only) and the GEC2 skills. It can also
+  search the web and add a follow-up to your board. It never emails anyone and never edits the workbook. It needs
+  `ANTHROPIC_API_KEY` in `.env`.
+- **Change Orders**, **Billing**, **Job Control Workbook** and **Claude Link** are the menu. Everything else (Command
+  center, Board, RFIs & Submittals, Schedule, Meetings, Email, Reminders, OneDrive, File Vault, Rangers) is still there
+  under **More tools**. Nothing was removed.
+
+### How Zordon and the Job Control Workbook fit together
+
+| | Job Control Workbook (`.xlsm`, one per job) | Zordon |
+|---|---|---|
+| What it is | The official record: contract, CO values and status, billing / SOV | The assistant around it: folders, reminders, tasks, the adviser |
+| Who changes it | You, by hand in Excel | Zordon and Claude, automatically |
+| Change orders | The CO line, its amount and status | The CO folder on OneDrive, its stage, the GC package PDF, the follow-up tasks |
+| Reads the other? | No | Yes, read-only (never saves it or runs its macros) |
+
+A change order's life: you make the CO PDF from the workbook and drop it in `Zordon/_Inbox` (or Claude does). Zordon
+files it into `CO 0XX - <title>`, builds the GC package, and puts "Review and send" on your board. When you mark it
+submitted or approved, Zordon moves the folder, adds the follow-up or billing task, and adds an OPEN line to
+`_PENDING WORKBOOK UPDATES.txt`. That line reminds you to enter the same change in the workbook, because only you
+update the workbook. Claude (Cowork) does the skilled pieces: finding backup, building PDFs, drafting the GC email.
+
 ---
 
 ## Quick start
@@ -111,21 +141,29 @@ Zordon follows OneDrive **`5. PROJECTS/0. JOB TEMPLATE - DO NOT DELETE`** (folde
 - File names use `YYYY-MM-DD` dates: `G2707_BURB RPT - RFI 14 - Beam at C4 - 2026-10-03.pdf`.
 
 **Change orders** follow the template: `01 COST CONTROL/04 CHANGE ORDERS/<1 PENDING | 2 SUBMITTED | 3 APPROVED |
-4 REJECTED-VOID>/CO 03 - <description>/`, each a copy of `_CO FOLDER TEMPLATE (DUPLICATE ME)` (01 PRICING - BACKUP,
-02 RFP-RFI REFERENCE, 03 T&M TAGS, 04 APPROVED CO DOCUMENTATION). Files are named `CO 03 - …` (the proposal sent to the
-GC also carries the job number). When a document shows the CO was submitted, approved or rejected, Zordon moves the
+4 REJECTED-VOID>/CO 003 - <description>/`, each a copy of `_CO FOLDER TEMPLATE (DUPLICATE ME)`: 01 ESTIMATE - LABOR &
+MATERIAL, 02 RFP-RFI REFERENCE, 03 T&M TAGS, 04 APPROVED CO DOCUMENTATION, and 05 QUOTES/VENDORS | SUBCONTRACTORS |
+CONSULTANTS | PROFESSIONAL SERVICES with one folder per company. Files are named for what they are:
+`CO 003 - Vendor Quote - Regency Supply Change 5.pdf`, `CO 003 - T&M Tag - 2026-10-04.pdf` (the proposal sent to the GC
+also carries the job number). The next number's empty folder (`CO 004`) waits in `04 CHANGE ORDERS` itself; it is
+renamed into `1 PENDING` when it gets its first document, and the following one is made. When a document shows the CO was submitted, approved or rejected, Zordon moves the
 whole CO folder to that status folder and adds the next steps: follow up with the GC, update the Job Control Workbook,
-bill it on the next pay app.
+bill it on the next pay app. Each status change also adds an OPEN line to `5. PROJECTS/Zordon/_PENDING WORKBOOK UPDATES.txt`
+until the `.xlsm` is updated by hand.
 
 **CO package for the GC:** when the Job Control Workbook's CO PDF lands in `Zordon/_Inbox` (Claude copies it there
 when you say "send CO 001 to Zordon"), Zordon creates `CO 001 - <description>` (the description is what follows
 "CO 001" in the file name, without the job number and name), puts the form in it, and builds
-`CO 001 - G3249 - <description>.pdf`: a contents page, the CO form, pricing/backup, any estimate folder, RFP/RFI
-reference and T&M tags, merged into one PDF. Backup filed later rebuilds it; **📎 Build GC package** on RFIs &
+`CO 001 - G3249 - <description>.pdf`: the CO form, RFP/RFI reference, material sheets (estimate), vendor quotes,
+sub/consultant quotes and other backup (T&M tags), merged into one PDF with no cover or contents page. Backup filed later rebuilds it; **📎 Build GC package** on RFIs &
 Submittals rebuilds it by hand. Non-PDF files (Excel, Word) are listed as skipped; save them as PDF to include them.
 
 **Submittals** get one folder per spec section (`14 SUBMITTALS/26 2416 - PANELBOARDS`); their status (submitted,
 returned, approved, released) is tracked on RFIs & Submittals.
+
+**Pay apps** go to `05 PAYMENT APPLICATIONS (MONTHLY BILLING)/PENCIL DRAFT (submitted)` or `APPROVED`, then
+`<year>/<MM Month>`. **LOIs, NTPs, sub quotes and POs** go to `06 PURCHASE ORDERS/<company>/LOI-NTP | QUOTES | PURCHASE ORDER`
+when the company folder exists.
 
 ## Claude Link (Cowork)
 
@@ -137,6 +175,8 @@ Zordon hands skilled work to your Claude in Cowork through OneDrive:
 
 Starter skills (edit them on the Claude Link page, or add your own): panel schedules & directories (uses your
 `GEC2_PANEL_SCHEDULE.xlsm`), contract review (electrical sub), drawing overlay (revision compare), spec review (Div 26/27/28).
+The GEC2 Job Control skills ship with it too: change orders (`co-update`, `gec2-co-folder-scan-rules`), new job folder
+setup, labor rate rules and the rate-sheet expiry date, sub quote / LOI / PO filing, and the Job Control app standards.
 
 **Learning your habits:** a weekly Claude check (Fridays) looks at how you actually named and filed things. Cowork
 watches too. When a new habit shows up 3+ times, they propose a rule or skill update; you approve or dismiss it on
