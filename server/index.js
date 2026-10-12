@@ -15,7 +15,7 @@ import { createVoiceSession, greeting, say, FAREWELL } from './voice.js';
 import { projectWeather } from './weather.js';
 import { scanOld, applyPlan, listArchiveLogs, undoArchive } from './cleanup.js';
 import { oneDriveStatus, listFolder, openOnComputer } from './onedrive.js';
-import { STAGES, packageType, stageFor, ensurePackage, coSubfolder, coLabel, specKey, recordPackage, setStage, listPackages, WORKBOOK_FILE } from './packages.js';
+import { STAGES, packageType, stageFor, ensurePackage, coSubfolder, coLabel, specKey, recordPackage, setStage, listPackages, WORKBOOK_FILE, scanCoFolders } from './packages.js';
 import { template, loadTemplate, copyTemplate, templateDir } from './template.js';
 import { compileCo } from './compile.js';
 import { askAdviser } from './adviser.js';
@@ -478,6 +478,25 @@ const categoryForPath = (path) => Object.entries(CATEGORY_FOLDERS).find(([, f]) 
 // What the _Inbox check saw last, so the screen can say whether email is flowing.
 export const inboxStatus = { checked_at: null, waiting: [], last_import: null, errors: [] };
 
+// Zordon follows the CO folders that Claude and the Job Control app create and move (see scanCoFolders).
+export const coWatch = { checked_at: null, jobs: 0, found: 0, last_change: null, changes: [], error: null };
+export async function watchCoFolders(db, vaultRoot, today = isoDate()) {
+  try {
+    const r = await scanCoFolders(db, vaultRoot, { today, me: mePersonId(db), addTask: (t) => createTask(db, t) });
+    const changes = [...r.added.map((x) => `New: ${x}`), ...r.moved];
+    Object.assign(coWatch, { checked_at: r.checked_at, jobs: r.jobs, found: r.found, error: null });
+    if (changes.length) {
+      coWatch.last_change = r.checked_at;
+      coWatch.changes = [...changes, ...coWatch.changes].slice(0, 20);
+      console.log(`[co] ${changes.join(' · ')}`);
+    }
+    return { ...r, changes };
+  } catch (err) {
+    coWatch.error = err.message;
+    throw err;
+  }
+}
+
 export async function processInbox(db, vaultRoot, today = isoDate()) {
   const filed = [];
   inboxStatus.checked_at = new Date().toISOString();
@@ -780,9 +799,11 @@ export function buildRoutes(db, { today = () => isoDate(), vaultRoot = process.e
       return {
         ai: aiEnabled(), stages, change_orders: cos.slice(0, 50),
         money_tasks: money.slice(0, 50), late: money.filter((t) => t.health === 'delayed').length,
-        due_soon: money.filter((t) => t.health === 'due_soon').length, workbook_open,
+        due_soon: money.filter((t) => t.health === 'due_soon').length, workbook_open, watch: coWatch,
       };
     }],
+    ['GET', '/api/changeorders/watch', () => coWatch],
+    ['POST', '/api/changeorders/scan', async () => ({ ...(await watchCoFolders(db, vaultRoot, today())), watch: coWatch })],
     ['POST', '/api/adviser', async ({ body }) => {
       if (!aiEnabled()) {
         return { ai: false, reply: 'The adviser needs Claude. Add ANTHROPIC_API_KEY=<your key> to the .env file next to Zordon (copy .env.example), then restart Zordon. Until then the money summary on this page still works.' };
@@ -1109,7 +1130,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     await syncControl(db, vaultRoot).catch((err) => console.warn(`[claude] sync: ${err.message}`));
     roster();
     processInbox(db, vaultRoot).catch((err) => console.warn(`[vault] inbox: ${err.message}`));
+    watchCoFolders(db, vaultRoot).catch((err) => console.warn(`[co] watch: ${err.message}`));
   })();
+  setInterval(() => watchCoFolders(db, vaultRoot).catch(() => {}), 3 * 60_000).unref();
   setInterval(roster, 15 * 60_000).unref();
   // Still on demo data? Keep trying the roster (OneDrive may still be downloading it) and switch over by itself.
   setInterval(async () => {

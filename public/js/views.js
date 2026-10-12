@@ -216,15 +216,32 @@ function md(text) {
 }
 
 // ---------------- Change orders ----------------
+// Zordon follows the CO folders Claude and the Job Control app create and move on OneDrive.
+function watchLine(w) {
+  if (w.error) return `⚠ Could not read the change order folders: ${esc(w.error)}`;
+  if (!w.checked_at) return 'Zordon checks every job\'s 04 CHANGE ORDERS folder on OneDrive every 3 minutes and follows what Claude and the Job Control app do there.';
+  const at = new Date(w.checked_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return `👁 Following OneDrive: ${w.found} CO folder(s) in ${w.jobs} job(s), checked ${at}. New CO folders and stage moves made by Claude or the Job Control app show up here by themselves.`;
+}
 async function changeorders(el, params, { render }) {
   const pk = await api('/api/packages?type=cor');
   const f = await api('/api/finance');
   el.innerHTML = `
-    <div class="page-head"><div><h1>Change orders</h1><p>Every CO Zordon is tracking, by stage. Changing the stage moves the CO folder on OneDrive and logs the workbook update.</p></div></div>
+    <div class="page-head"><div><h1>Change orders</h1><p>Every CO Zordon is tracking, by stage. Changing the stage moves the CO folder on OneDrive and logs the workbook update.</p></div>
+      <button class="btn" id="co-scan">⟳ Check OneDrive now</button></div>
+    <div class="watch-line small muted">${watchLine(f.watch)}</div>
     ${packagesPanel({ packages: pk.packages.filter((p) => p.type === 'cor'), stages: pk.stages }, { only: 'cor' })}
+    ${f.watch.changes.length ? `<section class="panel" style="margin-top:12px"><header><h2>Seen on OneDrive</h2><span class="small dim">from Claude and the Job Control app</span></header>
+      <div class="list">${f.watch.changes.map((c) => `<div class="small">${esc(c)}</div>`).join('')}</div></section>` : ''}
     ${f.workbook_open.length ? `<section class="panel" style="margin-top:12px"><header><h2>Still to enter in the Job Control Workbook</h2><span class="small dim">${esc(f.workbook_open.length)} open</span></header>
       <div class="list">${f.workbook_open.map((l) => `<div class="small mono">${esc(l.replace(/^OPEN \| /, ''))}</div>`).join('')}</div>
       <p class="small dim" style="margin-top:8px">Once it's in the .xlsm, change OPEN to DONE in <span class="mono">5. PROJECTS/Zordon/_PENDING WORKBOOK UPDATES.txt</span>, or tell Claude "CO 012 is in the workbook".</p></section>` : ''}`;
+  el.querySelector('#co-scan').addEventListener('click', (e) => guard(async () => {
+    e.target.disabled = true;
+    const r = await api('/api/changeorders/scan', { method: 'POST', body: {} });
+    toast(r.changes.length ? r.changes.join(' · ') : `Up to date: ${r.found} CO folder(s) in ${r.jobs} job(s)`);
+    render();
+  }));
   wirePackages(el, render);
 }
 
